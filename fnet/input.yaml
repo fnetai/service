@@ -12,8 +12,10 @@ properties:
     type: string
     description: "A brief description of the service"
   command:
-    type: string
-    description: "The command that starts the service"
+    type: array
+    description: "The command and arguments that start the service, as an array of strings"
+    items:
+      type: string
   user:
     type: string
     description: "User under which the service should run"
@@ -22,6 +24,9 @@ properties:
     description: "Environment variables for the service"
     additionalProperties:
       type: string
+  working_dir:
+    type: string
+    description: "The working directory for the service"
 required:
   - action
   - name

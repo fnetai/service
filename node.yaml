@@ -8,3 +8,4 @@ input: g::file://fnet/input.yaml
 features:
   app: false
   iife: false
+  t::dev::s::cli.fargs.default: dev  

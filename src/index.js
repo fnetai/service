@@ -1,10 +1,10 @@
 import { exec } from 'node:child_process';
 import os from 'node:os';
 import fs from 'node:fs';
+import path from 'node:path';
 
 // @ai: Please pay attention to 'action' value. Each action has different arg requirements.
-export default async ({ action, name, description, command, user, env = {} }) => {
-
+export default async ({ action, name, description, command, user, env = {}, working_dir }) => {
   const platform = os.platform();
 
   // Format environment variables for service files
@@ -13,7 +13,7 @@ export default async ({ action, name, description, command, user, env = {} }) =>
   // Windows service register/unregister functions
   const windowsService = (register) => {
     const serviceCmd = register
-      ? `sc create "${name}" binPath= "${command}" DisplayName= "${description}" start= auto`
+      ? `sc create "${name}" binPath= "${command.join(' ')}" DisplayName= "${description}" start= auto`
       : `sc delete "${name}"`;
 
     exec(serviceCmd, (err, stdout, stderr) => {
@@ -38,12 +38,13 @@ export default async ({ action, name, description, command, user, env = {} }) =>
           <string>${name}</string>
           <key>ProgramArguments</key>
           <array>
-            ${command.split(' ').map(arg => `<string>${arg}</string>`).join('\n')}
+            ${command.map(arg => `<string>${arg}</string>`).join('\n')}
           </array>
           <key>RunAtLoad</key>
           <true/>
           <key>KeepAlive</key>
           <true/>
+          ${working_dir ? `<key>WorkingDirectory</key><string>${path.resolve(working_dir)}</string>` : ''}
           ${user ? `<key>UserName</key><string>${user}</string>` : ''}
           ${Object.keys(env).length ? `<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join('\n')}</dict>` : ''}
         </dict>
@@ -77,9 +78,10 @@ export default async ({ action, name, description, command, user, env = {} }) =>
         After=network.target
 
         [Service]
-        ExecStart=${command}
+        ExecStart=${command.join(' ')}
         Restart=always
         ${user ? `User=${user}` : `User=${process.env.USER}`}
+        ${working_dir ? `WorkingDirectory=${path.resolve(working_dir)}` : ''}
         ${formattedEnv ? `Environment="${formattedEnv}"` : ''}
 
         [Install]
