@@ -1,0 +1,10 @@
+name: service
+
+ai::name: "@fnet/service"
+s::repo.url: https://gitlab.com/fnetai/service.git
+
+input: g::file://fnet/input.yaml
+
+features:
+  app: false
+  iife: false
