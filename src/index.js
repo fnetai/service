@@ -3,7 +3,6 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// @ai: Please pay attention to 'action' value. Each action has different arg requirements.
 export default async ({ action, name, description, command, user, env = {}, working_dir }) => {
   const platform = os.platform();
 
@@ -106,7 +105,7 @@ export default async ({ action, name, description, command, user, env = {}, work
     }
   };
 
-  // Platform-specific start/stop functions remain unchanged
+  // Platform-specific start/stop functions
   const windowsServiceStartStop = (start) => {
     exec(`sc ${start ? 'start' : 'stop'} "${name}"`, (err, stdout, stderr) => {
       if (err) {
@@ -137,6 +136,29 @@ export default async ({ action, name, description, command, user, env = {}, work
     });
   };
 
+  // Platform-specific enable function
+  const enableService = () => {
+    if (platform === 'linux') {
+      exec(`systemctl enable ${name}`, (err, stdout, stderr) => {
+        if (err) {
+          console.error(`Linux service enable error: ${stderr}`);
+        } else {
+          console.log(`Service "${name}" enabled successfully on Linux.`);
+        }
+      });
+    } else if (platform === 'darwin') {
+      exec(`sudo launchctl bootstrap system /Library/LaunchDaemons/${name}.plist`, (err, stdout, stderr) => {
+        if (err) {
+          console.error(`macOS service enable error: ${stderr}`);
+        } else {
+          console.log(`Service "${name}" enabled successfully on macOS.`);
+        }
+      });
+    } else {
+      console.log("Enable action is not required or supported on this platform.");
+    }
+  };
+
   // Evaluate action and execute respective function
   if (action === 'register') {
     if (platform === 'win32') windowsService(true);
@@ -158,7 +180,9 @@ export default async ({ action, name, description, command, user, env = {}, work
     else if (platform === 'darwin') macServiceStartStop(false);
     else if (platform === 'linux') linuxServiceStartStop(false);
     else console.error("Unsupported platform.");
+  } else if (action === 'enable') {
+    enableService();
   } else {
-    console.error("Invalid action. Use 'register', 'unregister', 'start', or 'stop'.");
+    console.error("Invalid action. Use 'register', 'unregister', 'start', 'stop', or 'enable'.");
   }
 };

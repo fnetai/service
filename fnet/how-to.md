@@ -2,11 +2,11 @@
 
 ## Overview
 
-The `@fnet/service` library is a cross-platform tool designed to manage system services on Windows, macOS, and Linux through a unified API. This library provides functions to register, unregister, start, and stop services, making it easier to control application processes that need to run as system services. By using this library, developers can streamline service management in their applications across different operating systems by leveraging a consistent interface.
+The `@fnet/service` library provides a straightforward interface for managing operating system services across different platforms: Windows, macOS, and Linux. It allows developers to register, unregister, start, stop, and enable services. This can be especially useful for automating service management tasks in environments where applications require consistent setup and execution as a background process.
 
 ## Installation
 
-To install `@fnet/service`, you can use either npm or yarn. Choose one of the following methods to add it to your project:
+You can install the `@fnet/service` library using npm or yarn. Below are the commands for installation:
 
 Using npm:
 ```bash
@@ -20,76 +20,83 @@ yarn add @fnet/service
 
 ## Usage
 
-To make use of `@fnet/service`, you will need to import it into your application and call it with the appropriate arguments. This library exposes a primary function to manage services based on the specified action.
+The primary export of the library is a function that allows you to control services. The function requires specific parameters that define the action and service properties.
 
-### Basic Usage
+### Parameters:
+- `action`: The action to be performed (`register`, `unregister`, `start`, `stop`, `enable`).
+- `name`: The name of the service.
+- `description`: A brief description of the service.
+- `command`: An array of command-line arguments to run the service.
+- `user`: The user under whose account the service will run (optional).
+- `env`: An object defining environment variables for the service (optional).
+- `working_dir`: The working directory for the service (optional).
 
-Here is a basic example of how to use the library to register, start, stop, and unregister a service:
+### Example Usages
 
+Registering a new service:
 ```javascript
 import manageService from '@fnet/service';
 
-// Service details
-const serviceDetails = {
-  name: 'myService',
-  description: 'My Test Service',
-  command: '/usr/bin/my_service_command', // Command to run the service
-  user: 'serviceUser',                    // (Optional) User to run the service as
-  env: {                                  // (Optional) Environment variables
-    ENV_VAR: 'value'
-  }
-};
+manageService({
+    action: 'register',
+    name: 'MyService',
+    description: 'A demo service',
+    command: ['node', '/path/to/app.js'],
+    user: 'serviceUser', // Optional
+    env: { NODE_ENV: 'production' }, // Optional
+    working_dir: '/path/to/working/directory' // Optional
+});
+```
 
-// Register the service
-await manageService({ ...serviceDetails, action: 'register' });
+Starting a registered service:
+```javascript
+manageService({
+    action: 'start',
+    name: 'MyService'
+});
+```
 
-// Start the service
-await manageService({ ...serviceDetails, action: 'start' });
-
-// Stop the service
-await manageService({ ...serviceDetails, action: 'stop' });
-
-// Unregister the service
-await manageService({ ...serviceDetails, action: 'unregister' });
+Unregistering a service:
+```javascript
+manageService({
+    action: 'unregister',
+    name: 'MyService'
+});
 ```
 
 ## Examples
 
-### Registering a Service
+Here's a basic setup to create and manage a service on any supported platform:
 
-To register a new service, provide the necessary service details such as the name, description, and command to be executed:
+### Register and Start a Service
 ```javascript
-await manageService({ 
-  action: 'register', 
-  name: 'exampleService', 
-  description: 'An Example Service', 
-  command: '/path/to/executable', 
-  user: 'serviceUser',
-  env: { NODE_ENV: 'production' }
+import manageService from '@fnet/service';
+
+// Register a new service
+manageService({
+    action: 'register',
+    name: 'AutoBackup',
+    description: 'Automated Backup Service',
+    command: ['node', '/scripts/backup.js']
 });
+
+// Start the service
+manageService({ action: 'start', name: 'AutoBackup' });
 ```
 
-### Starting a Service
-
-Once the service is registered, you can start it using:
+### Stop and Unregister a Service
 ```javascript
-await manageService({ action: 'start', name: 'exampleService' });
+import manageService from '@fnet/service';
+
+// Stop a running service
+manageService({ action: 'stop', name: 'AutoBackup' });
+
+// Unregister the service
+manageService({ action: 'unregister', name: 'AutoBackup' });
 ```
 
-### Stopping a Service
-
-To stop a running service:
-```javascript
-await manageService({ action: 'stop', name: 'exampleService' });
-```
-
-### Unregistering a Service
-
-Remove a previously registered service:
-```javascript
-await manageService({ action: 'unregister', name: 'exampleService' });
-```
+These examples cover the essential operations like registering, starting, stopping, and unregistering a service. Modify the parameters according to your application's needs to ensure it fits within your system's service management framework.
 
 ## Acknowledgement
 
-We acknowledge and appreciate the contributors who have helped in the development of this library.
+The `@fnet/service` library utilizes the Node.js Child Process module, as part of its functionality to execute command-line operations across different operating systems. These are foundational tools within the Node.js ecosystem.
