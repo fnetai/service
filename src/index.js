@@ -5,9 +5,24 @@ import path from 'node:path';
 
 export default async ({ action, name, description, command, user, env = {}, working_dir }) => {
   const platform = os.platform();
+  const plistPath = `/Library/LaunchDaemons/${name}.plist`;
+  const servicePath = `/etc/systemd/system/${name}.service`;
 
   // Format environment variables for service files
   const formattedEnv = Object.entries(env).map(([key, value]) => `${key}=${value}`).join(' ');
+
+  // Helper function to check file existence and log warnings
+  const checkFileExists = (filePath, shouldExist, action) => {
+    const fileExists = fs.existsSync(filePath);
+    if (shouldExist && !fileExists) {
+      console.error(`Error: ${filePath} not found for action "${action}".`);
+      return false;
+    } else if (!shouldExist && fileExists) {
+      console.error(`Warning: ${filePath} already exists for action "${action}".`);
+      return false;
+    }
+    return true;
+  };
 
   // Windows service register/unregister functions
   const windowsService = (register) => {
@@ -26,8 +41,9 @@ export default async ({ action, name, description, command, user, env = {}, work
 
   // macOS service register/unregister functions
   const macService = (register) => {
-    const plistPath = `/Library/LaunchDaemons/${name}.plist`;
     if (register) {
+      if (!checkFileExists(plistPath, false, "register")) return;
+      
       const plistContent = `
       <?xml version="1.0" encoding="UTF-8"?>
       <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -57,6 +73,8 @@ export default async ({ action, name, description, command, user, env = {}, work
         }
       });
     } else {
+      if (!checkFileExists(plistPath, true, "unregister")) return;
+      
       exec(`launchctl unload -w ${plistPath} && rm ${plistPath}`, (err, stdout, stderr) => {
         if (err) {
           console.error(`macOS service error: ${stderr}`);
@@ -69,8 +87,9 @@ export default async ({ action, name, description, command, user, env = {}, work
 
   // Linux service register/unregister functions
   const linuxService = (register) => {
-    const servicePath = `/etc/systemd/system/${name}.service`;
     if (register) {
+      if (!checkFileExists(servicePath, false, "register")) return;
+      
       const serviceContent = `
         [Unit]
         Description=${description}
@@ -95,6 +114,8 @@ export default async ({ action, name, description, command, user, env = {}, work
         }
       });
     } else {
+      if (!checkFileExists(servicePath, true, "unregister")) return;
+      
       exec(`systemctl stop ${name} && systemctl disable ${name} && rm ${servicePath}`, (err, stdout, stderr) => {
         if (err) {
           console.error(`Linux service error: ${stderr}`);
@@ -139,6 +160,7 @@ export default async ({ action, name, description, command, user, env = {}, work
   // Platform-specific enable function
   const enableService = () => {
     if (platform === 'linux') {
+      if (!checkFileExists(servicePath, true, "enable")) return;
       exec(`systemctl enable ${name}`, (err, stdout, stderr) => {
         if (err) {
           console.error(`Linux service enable error: ${stderr}`);
@@ -147,6 +169,7 @@ export default async ({ action, name, description, command, user, env = {}, work
         }
       });
     } else if (platform === 'darwin') {
+      if (!checkFileExists(plistPath, true, "enable")) return;
       exec(`sudo launchctl bootstrap system /Library/LaunchDaemons/${name}.plist`, (err, stdout, stderr) => {
         if (err) {
           console.error(`macOS service enable error: ${stderr}`);
