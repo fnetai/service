@@ -16,7 +16,7 @@ commands:
   register:
     usage: frun register
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}" --user="{{user}}" --description="{{description}}" --command="/Users/gboyraz/.fnet/bin/find-free-port" --command="--cli-mode" --command="mcp" --command="--mcp-transport" --command="sse"
+      - fnode cli --action="{{action}}" --name="{{name}}" --user="{{user}}" --description="{{description}}" --command="/Users/gboyraz/.fnet/bin/find-free-port" --command="--cli-mode" --command="mcp" --command="--mcp-transport" --command="sse"
 
     context:
       action: register
@@ -27,7 +27,7 @@ commands:
   unregister:
     usage: frun unregister
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+      - fnode cli --action="{{action}}" --name="{{name}}"
 
     context:
       action: unregister
@@ -36,7 +36,7 @@ commands:
   enable:
     usage: frun enable
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+      - fnode cli --action="{{action}}" --name="{{name}}"
 
     context:
       action: enable
@@ -45,7 +45,7 @@ commands:
   status:
     usage: frun status
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+      - fnode cli --action="{{action}}" --name="{{name}}"
     context:
       action: status
       name: ai.flownet.find-free-port
@@ -53,7 +53,7 @@ commands:
   start:
     usage: frun start
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+      - fnode cli --action="{{action}}" --name="{{name}}"
     context:
       action: start
       name: ai.flownet.find-free-port
@@ -61,7 +61,7 @@ commands:
   stop:
     usage: frun stop
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+      - fnode cli --action="{{action}}" --name="{{name}}"
     context:
       action: stop
       name: ai.flownet.find-free-port
@@ -69,7 +69,7 @@ commands:
   health:
     usage: frun health
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+      - fnode cli --action="{{action}}" --name="{{name}}"
     context:
       action: health
       name: ai.flownet.find-free-port
@@ -77,7 +77,7 @@ commands:
   inspect:
     usage: frun inspect
     steps:
-      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+      - fnode cli --action="{{action}}" --name="{{name}}"
     context:
       action: inspect
       name: ai.flownet.find-free-port
