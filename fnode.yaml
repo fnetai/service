@@ -14,7 +14,7 @@ features:
 
 commands:
   register:
-    usage: frun register
+    usage: sudo -S frun register
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}" --user="{{user}}" --description="{{description}}" --command="/Users/gboyraz/.fnet/bin/find-free-port" --command="--cli-mode" --command="mcp" --command="--mcp-transport" --command="sse"
 
@@ -25,7 +25,7 @@ commands:
       user: gboyraz
 
   unregister:
-    usage: frun unregister
+    usage: sudo -S frun unregister
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}"
 
@@ -34,7 +34,7 @@ commands:
       name: ai.flownet.find-free-port
 
   enable:
-    usage: frun enable
+    usage: sudo -S frun enable
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}"
 
@@ -43,7 +43,7 @@ commands:
       name: ai.flownet.find-free-port
 
   status:
-    usage: frun status
+    usage: sudo -S frun status
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}"
     context:
@@ -51,7 +51,7 @@ commands:
       name: ai.flownet.find-free-port
 
   start:
-    usage: frun start
+    usage: sudo -S frun start
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}"
     context:
@@ -59,7 +59,7 @@ commands:
       name: ai.flownet.find-free-port
 
   stop:
-    usage: frun stop
+    usage: sudo -S frun stop
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}"
     context:
@@ -67,7 +67,7 @@ commands:
       name: ai.flownet.find-free-port
 
   health:
-    usage: frun health
+    usage: sudo -S frun health
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}"
     context:
@@ -75,7 +75,7 @@ commands:
       name: ai.flownet.find-free-port
 
   inspect:
-    usage: frun inspect
+    usage: sudo -S frun inspect
     steps:
       - fnode cli --action="{{action}}" --name="{{name}}"
     context:

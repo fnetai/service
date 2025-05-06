@@ -257,7 +257,7 @@ const validateConfig = ({ action, name, description, command, user, env, working
 
 /**
  * @typedef {Object} Input
- * @property {'register' | 'unregister' | 'start' | 'stop' | 'enable' | 'status' | 'health'} action - The operation to perform on the service
+ * @property {'register' | 'unregister' | 'start' | 'stop' | 'enable' | 'status' | 'health' | 'inspect'} action - The operation to perform on the service
  * @property {string} name - Service identifier
  * @property {string} [description] - Service description (required for registration)
  * @property {string[]} [command] - Command array to execute (required for registration)
@@ -279,7 +279,7 @@ const validateConfig = ({ action, name, description, command, user, env, working
 /**
  * Manages system services across Windows, macOS, and Linux platforms
  * @param {Input} config - Service configuration object
- * @returns {Promise<Output|void>} Returns status information for 'status' and 'health' actions
+ * @returns {Promise<Output|void>} Returns status information for 'status', 'health', and 'inspect' actions
  * @throws {Error} Throws if configuration validation fails or operation errors occur
  * @example
  * // Register a new system-wide service
@@ -307,6 +307,15 @@ const validateConfig = ({ action, name, description, command, user, env, working
  *   action: 'health',
  *   name: 'MyService'
  * });
+ *
+ * // Inspect service configuration
+ * const config = await manageService({
+ *   action: 'inspect',
+ *   name: 'MyService'
+ * });
+ *
+ * // Note: On macOS, 'start' and 'stop' actions use launchctl load/unload
+ * // which is the proper way to control services in macOS's launchd system
  */
 export default async (config) => {
   try {
@@ -542,18 +551,20 @@ export default async (config) => {
           return reject(new Error(`${plistPath} does not exist`));
         }
 
-        // Fix: Use start/stop instead of load/unload for running services
         // Check if we need sudo for system-level services
         const needsSudo = plistPath.startsWith('/Library/');
 
-        // For macOS, we need to use different commands for start/stop
+        // For macOS, use load/unload with -w flag for more reliable control
+        // This is more consistent with how launchd actually works
         let cmd;
         if (start) {
-          // To start a service, we use 'launchctl start' for the service label
-          cmd = `${needsSudo ? 'sudo ' : ''}launchctl start ${name}`;
+          // To start a service in macOS, we load the plist file
+          // The -w flag ensures it stays enabled across reboots
+          cmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
         } else {
-          // To stop a service, we use 'launchctl stop' for the service label
-          cmd = `${needsSudo ? 'sudo ' : ''}launchctl stop ${name}`;
+          // To stop a service in macOS, we unload the plist file
+          // The -w flag ensures it stays disabled across reboots
+          cmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath}`;
         }
 
         exec(cmd, (err, stdout, stderr) => {
@@ -623,7 +634,10 @@ export default async (config) => {
 
           // Check if we need sudo for system-level services
           const needsSudo = plistPath.startsWith('/Library/');
-          const cmd = `${needsSudo ? 'sudo ' : ''}launchctl bootstrap system ${plistPath}`;
+
+          // For macOS, the proper way to enable a service is to load it with the -w flag
+          // This ensures the service is loaded now and will be loaded on system startup
+          const cmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
 
           exec(cmd, (err, stdout, stderr) => {
             if (err) {
