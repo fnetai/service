@@ -5,9 +5,79 @@ npm::name: "@fnet/service"
 
 s::repo.url: https://gitlab.com/fnetai/service.git
 
-input: g::file://fnet/input.yaml
+input: g::file://./fnet/input.yaml
 
 features:
   app: false
   dts: true
   t::dev::s::cli.fargs.default: dev
+
+commands:
+  register:
+    usage: frun register
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}" --user="{{user}}" --description="{{description}}" --command="/Users/gboyraz/.fnet/bin/find-free-port" --command="--cli-mode" --command="mcp" --command="--mcp-transport" --command="sse"
+
+    context:
+      action: register
+      name: ai.flownet.find-free-port
+      description: Find free port
+      user: gboyraz
+
+  unregister:
+    usage: frun unregister
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+
+    context:
+      action: unregister
+      name: ai.flownet.find-free-port
+
+  enable:
+    usage: frun enable
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+
+    context:
+      action: enable
+      name: ai.flownet.find-free-port
+
+  status:
+    usage: frun status
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+    context:
+      action: status
+      name: ai.flownet.find-free-port
+
+  start:
+    usage: frun start
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+    context:
+      action: start
+      name: ai.flownet.find-free-port
+
+  stop:
+    usage: frun stop
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+    context:
+      action: stop
+      name: ai.flownet.find-free-port
+
+  health:
+    usage: frun health
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+    context:
+      action: health
+      name: ai.flownet.find-free-port
+
+  inspect:
+    usage: frun inspect
+    steps:
+      - sudo -S fnode cli --action="{{action}}" --name="{{name}}"
+    context:
+      action: inspect
+      name: ai.flownet.find-free-port

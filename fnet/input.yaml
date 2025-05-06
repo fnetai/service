@@ -4,7 +4,7 @@ properties:
   action:
     type: string
     description: "The operation to perform on the service"
-    enum: ["register", "unregister", "start", "stop", "enable", "status", "health"]
+    enum: ["register", "unregister", "start", "stop", "enable", "status", "health", "inspect"]
   name:
     type: string
     description: "Service identifier"

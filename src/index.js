@@ -31,17 +31,37 @@ const getServiceStatus = async (name, platform) => {
         return ServiceStatus.UNKNOWN;
 
       case 'darwin':
-        const macStatus = execSync(`launchctl list | grep "${name}"`).toString();
-        // Parse macOS service status
-        const [pid] = macStatus.split(/\s+/);
-        return pid && parseInt(pid) > 0 ? ServiceStatus.RUNNING : ServiceStatus.STOPPED;
+        try {
+          // Check if service exists first
+          const macStatus = execSync(`launchctl list | grep "${name}"`).toString();
+          if (!macStatus.trim()) {
+            return ServiceStatus.UNKNOWN;
+          }
+          // Parse macOS service status
+          const [pid] = macStatus.split(/\s+/);
+          return pid && parseInt(pid) > 0 ? ServiceStatus.RUNNING : ServiceStatus.STOPPED;
+        } catch (macError) {
+          // If grep returns nothing (service doesn't exist), it will exit with code 1
+          if (macError.status === 1) {
+            return ServiceStatus.UNKNOWN;
+          }
+          throw macError;
+        }
 
       case 'linux':
-        const linuxStatus = execSync(`systemctl is-active "${name}"`).toString().trim();
-        switch (linuxStatus) {
-          case 'active': return ServiceStatus.RUNNING;
-          case 'failed': return ServiceStatus.FAILED;
-          default: return ServiceStatus.STOPPED;
+        try {
+          const linuxStatus = execSync(`systemctl is-active "${name}"`).toString().trim();
+          switch (linuxStatus) {
+            case 'active': return ServiceStatus.RUNNING;
+            case 'failed': return ServiceStatus.FAILED;
+            default: return ServiceStatus.STOPPED;
+          }
+        } catch (linuxError) {
+          // If service doesn't exist, systemctl will exit with non-zero code
+          if (linuxError.status !== 0) {
+            return ServiceStatus.UNKNOWN;
+          }
+          throw linuxError;
         }
 
       default:
@@ -50,6 +70,92 @@ const getServiceStatus = async (name, platform) => {
   } catch (error) {
     console.error(`Error getting service status: ${error.message}`);
     return ServiceStatus.UNKNOWN;
+  }
+};
+
+// Add service configuration inspection functionality
+const inspectServiceConfig = async (name, platform) => {
+  try {
+    // Determine the service configuration file path based on platform
+    let configPath;
+    let configContent;
+
+    switch (platform) {
+      case 'win32':
+        // For Windows, we can query the service configuration
+        try {
+          configContent = execSync(`sc qc "${name}"`).toString();
+          return {
+            name,
+            platform,
+            configType: 'Windows Service',
+            configContent,
+            timestamp: new Date().toISOString()
+          };
+        } catch (error) {
+          throw new Error(`Service "${name}" not found or cannot be accessed: ${error.message}`);
+        }
+
+      case 'darwin':
+        // For macOS, check both system and user locations
+        const systemPlistPath = `/Library/LaunchDaemons/${name}.plist`;
+        const userPlistPath = `${os.homedir()}/Library/LaunchAgents/${name}.plist`;
+
+        if (fs.existsSync(systemPlistPath)) {
+          configPath = systemPlistPath;
+        } else if (fs.existsSync(userPlistPath)) {
+          configPath = userPlistPath;
+        } else {
+          throw new Error(`Service configuration for "${name}" not found in standard locations.`);
+        }
+
+        try {
+          configContent = fs.readFileSync(configPath, 'utf8');
+          return {
+            name,
+            platform,
+            configType: 'macOS LaunchDaemon/LaunchAgent',
+            configPath,
+            configContent,
+            timestamp: new Date().toISOString()
+          };
+        } catch (error) {
+          throw new Error(`Error reading service configuration: ${error.message}`);
+        }
+
+      case 'linux':
+        // For Linux, check both system and user locations
+        const systemServicePath = `/etc/systemd/system/${name}.service`;
+        const userServicePath = `${os.homedir()}/.config/systemd/user/${name}.service`;
+
+        if (fs.existsSync(systemServicePath)) {
+          configPath = systemServicePath;
+        } else if (fs.existsSync(userServicePath)) {
+          configPath = userServicePath;
+        } else {
+          throw new Error(`Service configuration for "${name}" not found in standard locations.`);
+        }
+
+        try {
+          configContent = fs.readFileSync(configPath, 'utf8');
+          return {
+            name,
+            platform,
+            configType: 'Linux Systemd Service',
+            configPath,
+            configContent,
+            timestamp: new Date().toISOString()
+          };
+        } catch (error) {
+          throw new Error(`Error reading service configuration: ${error.message}`);
+        }
+
+      default:
+        throw new Error(`Unsupported platform: ${platform}`);
+    }
+  } catch (error) {
+    console.error(`Error inspecting service configuration: ${error.message}`);
+    throw error;
   }
 };
 
@@ -138,6 +244,10 @@ const validateConfig = ({ action, name, description, command, user, env, working
     if (!description?.trim()) errors.push('Service description is required');
     if (!Array.isArray(command) || command.length === 0) errors.push('Command array is required');
     if (working_dir && !fs.existsSync(working_dir)) errors.push('Working directory does not exist');
+    // Validate environment variables if provided
+    if (env && typeof env !== 'object') errors.push('Environment variables must be an object');
+    // Validate user if provided
+    if (user && typeof user !== 'string') errors.push('User must be a string');
   }
 
   if (errors.length > 0) {
@@ -154,6 +264,7 @@ const validateConfig = ({ action, name, description, command, user, env, working
  * @property {string} [user] - User account to run the service
  * @property {Record<string, string>} [env] - Environment variables for the service
  * @property {string} [working_dir] - Working directory for the service
+ * @property {boolean} [system_level=true] - Whether to register as system-wide service (true) or user-level service (false)
  */
 
 /**
@@ -171,13 +282,24 @@ const validateConfig = ({ action, name, description, command, user, env, working
  * @returns {Promise<Output|void>} Returns status information for 'status' and 'health' actions
  * @throws {Error} Throws if configuration validation fails or operation errors occur
  * @example
- * // Register a new service
+ * // Register a new system-wide service
  * await manageService({
  *   action: 'register',
  *   name: 'MyService',
  *   description: 'Example service',
  *   command: ['node', '/path/to/app.js'],
- *   env: { NODE_ENV: 'production' }
+ *   env: { NODE_ENV: 'production' },
+ *   system_level: true
+ * });
+ *
+ * // Register a user-level service
+ * await manageService({
+ *   action: 'register',
+ *   name: 'MyUserService',
+ *   description: 'Example user service',
+ *   command: ['node', '/path/to/app.js'],
+ *   env: { NODE_ENV: 'development' },
+ *   system_level: false
  * });
  *
  * // Check service health
@@ -190,7 +312,7 @@ export default async (config) => {
   try {
     validateConfig(config);
 
-    const { action, name, env = {}, description, command, working_dir, user } = config;
+    const { action, name, env = {}, description, command, working_dir, user, system_level = true } = config;
     const platform = os.platform();
 
     // Add status check action
@@ -203,8 +325,31 @@ export default async (config) => {
       return await checkServiceHealth(name, platform);
     }
 
-    const plistPath = `/Library/LaunchDaemons/${name}.plist`;
-    const servicePath = `/etc/systemd/system/${name}.service`;
+    // Add inspect action to show service configuration
+    if (action === 'inspect') {
+      return await inspectServiceConfig(name, platform);
+    }
+
+    // Define paths based on system_level option
+    let plistPath, servicePath;
+
+    if (system_level) {
+      // System-wide services
+      plistPath = `/Library/LaunchDaemons/${name}.plist`;
+      servicePath = `/etc/systemd/system/${name}.service`;
+    } else {
+      // User-level services
+      const homeDir = os.homedir();
+      plistPath = `${homeDir}/Library/LaunchAgents/${name}.plist`;
+
+      // For Linux, use user-level systemd directory
+      // Create the directory if it doesn't exist
+      const userSystemdDir = `${homeDir}/.config/systemd/user`;
+      if (platform === 'linux' && !fs.existsSync(userSystemdDir)) {
+        fs.mkdirSync(userSystemdDir, { recursive: true });
+      }
+      servicePath = `${userSystemdDir}/${name}.service`;
+    }
 
     // Format environment variables for service files
     const formattedEnv = Object.entries(env).map(([key, value]) => `${key}=${value}`).join(' ');
@@ -222,79 +367,105 @@ export default async (config) => {
       return true;
     };
 
-    // Windows service register/unregister functions
-    const windowsService = (register) => {
-      const serviceCmd = register
-        ? `sc create "${name}" binPath= "${command.join(' ')}" DisplayName= "${description}" start= auto`
-        : `sc delete "${name}"`;
+    // Windows service register/unregister functions are handled by the windowsService function defined earlier
 
-      exec(serviceCmd, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`Windows service error: ${stderr}`);
+    // macOS service register/unregister functions
+    const macService = async (register) => {
+      return new Promise((resolve, reject) => {
+        if (register) {
+          if (!checkFileExists(plistPath, false, "register")) {
+            return reject(new Error(`${plistPath} already exists`));
+          }
+
+          // Escape special characters in command arguments
+          const escapedCommandArgs = command.map(arg => arg.replace(/(["\s'$`\\])/g, '\\$1'));
+
+          const plistContent = `
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+            <dict>
+              <key>Label</key>
+              <string>${name}</string>
+              <key>ProgramArguments</key>
+              <array>
+                ${escapedCommandArgs.map(arg => `<string>${arg}</string>`).join('\n')}
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+              <key>KeepAlive</key>
+              <true/>
+              ${working_dir ? `<key>WorkingDirectory</key><string>${path.resolve(working_dir)}</string>` : ''}
+              ${user ? `<key>UserName</key><string>${user}</string>` : ''}
+              ${Object.keys(env).length ? `<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join('\n')}</dict>` : ''}
+            </dict>
+          </plist>`;
+
+          try {
+            fs.writeFileSync(plistPath, plistContent);
+
+            // Check if we need sudo for system-level services
+            const needsSudo = plistPath.startsWith('/Library/');
+            const loadCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
+
+            exec(loadCmd, (err, stdout, stderr) => {
+              if (err) {
+                console.error(`macOS service error: ${stderr}`);
+                if (stderr.includes('Permission denied')) {
+                  console.error('This operation requires root privileges. Try running with sudo.');
+                }
+                reject(err);
+              } else {
+                console.log(`Service "${name}" registered successfully on macOS.`);
+                resolve(stdout);
+              }
+            });
+          } catch (error) {
+            reject(error);
+          }
         } else {
-          console.log(`Service "${name}" ${register ? 'registered' : 'unregistered'} successfully on Windows.`);
+          if (!checkFileExists(plistPath, true, "unregister")) {
+            return reject(new Error(`${plistPath} does not exist`));
+          }
+
+          // Check if we need sudo for system-level services
+          const needsSudo = plistPath.startsWith('/Library/');
+          const unloadCmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath} && ${needsSudo ? 'sudo ' : ''}rm ${plistPath}`;
+
+          exec(unloadCmd, (err, stdout, stderr) => {
+            if (err) {
+              console.error(`macOS service error: ${stderr}`);
+              if (stderr.includes('Permission denied')) {
+                console.error('This operation requires root privileges. Try running with sudo.');
+              }
+              reject(err);
+            } else {
+              console.log(`Service "${name}" unregistered successfully on macOS.`);
+              resolve(stdout);
+            }
+          });
         }
       });
     };
 
-    // macOS service register/unregister functions
-    const macService = (register) => {
-      if (register) {
-        if (!checkFileExists(plistPath, false, "register")) return;
-
-        const plistContent = `
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-          <dict>
-            <key>Label</key>
-            <string>${name}</string>
-            <key>ProgramArguments</key>
-            <array>
-              ${command.map(arg => `<string>${arg}</string>`).join('\n')}
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>KeepAlive</key>
-            <true/>
-            ${working_dir ? `<key>WorkingDirectory</key><string>${path.resolve(working_dir)}</string>` : ''}
-            ${user ? `<key>UserName</key><string>${user}</string>` : ''}
-            ${Object.keys(env).length ? `<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join('\n')}</dict>` : ''}
-          </dict>
-        </plist>`;
-        fs.writeFileSync(plistPath, plistContent);
-        exec(`launchctl load -w ${plistPath}`, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`macOS service error: ${stderr}`);
-          } else {
-            console.log(`Service "${name}" registered successfully on macOS.`);
-          }
-        });
-      } else {
-        if (!checkFileExists(plistPath, true, "unregister")) return;
-
-        exec(`launchctl unload -w ${plistPath} && rm ${plistPath}`, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`macOS service error: ${stderr}`);
-          } else {
-            console.log(`Service "${name}" unregistered successfully on macOS.`);
-          }
-        });
-      }
-    };
-
     // Linux service register/unregister functions
-    const linuxService = (register) => {
-      if (register) {
-        if (!checkFileExists(servicePath, false, "register")) return;
+    const linuxService = async (register) => {
+      return new Promise((resolve, reject) => {
+        if (register) {
+          if (!checkFileExists(servicePath, false, "register")) {
+            return reject(new Error(`${servicePath} already exists`));
+          }
 
-        const serviceContent = `
+          // Escape special characters in command arguments
+          const escapedCommand = command.map(arg => arg.replace(/(["\s'$`\\])/g, '\\$1')).join(' ');
+
+          const serviceContent = `
           [Unit]
           Description=${description}
           After=network.target
 
           [Service]
-          ExecStart=${command.join(' ')}
+          ExecStart=${escapedCommand}
           Restart=always
           ${user ? `User=${user}` : `User=${process.env.USER}`}
           ${working_dir ? `WorkingDirectory=${path.resolve(working_dir)}` : ''}
@@ -303,108 +474,224 @@ export default async (config) => {
           [Install]
           WantedBy=multi-user.target`;
 
-        fs.writeFileSync(servicePath, serviceContent);
-        exec(`systemctl enable ${name} && systemctl start ${name}`, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`Linux service error: ${stderr}`);
-          } else {
-            console.log(`Service "${name}" registered successfully on Linux.`);
-          }
-        });
-      } else {
-        if (!checkFileExists(servicePath, true, "unregister")) return;
+          try {
+            fs.writeFileSync(servicePath, serviceContent);
 
-        exec(`systemctl stop ${name} && systemctl disable ${name} && rm ${servicePath}`, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`Linux service error: ${stderr}`);
-          } else {
-            console.log(`Service "${name}" unregistered successfully on Linux.`);
+            // Check if we need sudo for system-level services
+            const needsSudo = servicePath.startsWith('/etc/');
+            const enableCmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name} && ${needsSudo ? 'sudo ' : ''}systemctl start ${name}`;
+
+            exec(enableCmd, (err, stdout, stderr) => {
+              if (err) {
+                console.error(`Linux service error: ${stderr}`);
+                if (stderr.includes('Permission denied')) {
+                  console.error('This operation requires root privileges. Try running with sudo.');
+                }
+                reject(err);
+              } else {
+                console.log(`Service "${name}" registered successfully on Linux.`);
+                resolve(stdout);
+              }
+            });
+          } catch (error) {
+            reject(error);
           }
-        });
-      }
+        } else {
+          if (!checkFileExists(servicePath, true, "unregister")) {
+            return reject(new Error(`${servicePath} does not exist`));
+          }
+
+          // Check if we need sudo for system-level services
+          const needsSudo = servicePath.startsWith('/etc/');
+          const disableCmd = `${needsSudo ? 'sudo ' : ''}systemctl stop ${name} && ${needsSudo ? 'sudo ' : ''}systemctl disable ${name} && ${needsSudo ? 'sudo ' : ''}rm ${servicePath}`;
+
+          exec(disableCmd, (err, stdout, stderr) => {
+            if (err) {
+              console.error(`Linux service error: ${stderr}`);
+              if (stderr.includes('Permission denied')) {
+                console.error('This operation requires root privileges. Try running with sudo.');
+              }
+              reject(err);
+            } else {
+              console.log(`Service "${name}" unregistered successfully on Linux.`);
+              resolve(stdout);
+            }
+          });
+        }
+      });
     };
 
     // Platform-specific start/stop functions
-    const windowsServiceStartStop = (start) => {
-      exec(`sc ${start ? 'start' : 'stop'} "${name}"`, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`Windows ${start ? 'start' : 'stop'} error: ${stderr}`);
-        } else {
-          console.log(`Service "${name}" ${start ? 'started' : 'stopped'} successfully on Windows.`);
-        }
+    const windowsServiceStartStop = async (start) => {
+      return new Promise((resolve, reject) => {
+        exec(`sc ${start ? 'start' : 'stop'} "${name}"`, (err, stdout, stderr) => {
+          if (err) {
+            console.error(`Windows ${start ? 'start' : 'stop'} error: ${stderr}`);
+            reject(err);
+          } else {
+            console.log(`Service "${name}" ${start ? 'started' : 'stopped'} successfully on Windows.`);
+            resolve(stdout);
+          }
+        });
       });
     };
 
-    const macServiceStartStop = (start) => {
-      exec(`launchctl ${start ? 'load' : 'unload'} -w /Library/LaunchDaemons/${name}.plist`, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`macOS ${start ? 'start' : 'stop'} error: ${stderr}`);
-        } else {
-          console.log(`Service "${name}" ${start ? 'started' : 'stopped'} successfully on macOS.`);
+    const macServiceStartStop = async (start) => {
+      return new Promise((resolve, reject) => {
+        if (!checkFileExists(plistPath, true, start ? "start" : "stop")) {
+          return reject(new Error(`${plistPath} does not exist`));
         }
+
+        // Fix: Use start/stop instead of load/unload for running services
+        // Check if we need sudo for system-level services
+        const needsSudo = plistPath.startsWith('/Library/');
+
+        // For macOS, we need to use different commands for start/stop
+        let cmd;
+        if (start) {
+          // To start a service, we use 'launchctl start' for the service label
+          cmd = `${needsSudo ? 'sudo ' : ''}launchctl start ${name}`;
+        } else {
+          // To stop a service, we use 'launchctl stop' for the service label
+          cmd = `${needsSudo ? 'sudo ' : ''}launchctl stop ${name}`;
+        }
+
+        exec(cmd, (err, stdout, stderr) => {
+          if (err) {
+            console.error(`macOS ${start ? 'start' : 'stop'} error: ${stderr}`);
+            if (stderr.includes('Permission denied')) {
+              console.error('This operation requires root privileges. Try running with sudo.');
+            }
+            reject(err);
+          } else {
+            console.log(`Service "${name}" ${start ? 'started' : 'stopped'} successfully on macOS.`);
+            resolve(stdout);
+          }
+        });
       });
     };
 
-    const linuxServiceStartStop = (start) => {
-      exec(`systemctl ${start ? 'start' : 'stop'} ${name}`, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`Linux ${start ? 'start' : 'stop'} error: ${stderr}`);
-        } else {
-          console.log(`Service "${name}" ${start ? 'started' : 'stopped'} successfully on Linux.`);
-        }
+    const linuxServiceStartStop = async (start) => {
+      return new Promise((resolve, reject) => {
+        // Check if we need sudo for system-level services
+        const needsSudo = servicePath.startsWith('/etc/');
+        const cmd = `${needsSudo ? 'sudo ' : ''}systemctl ${start ? 'start' : 'stop'} ${name}`;
+
+        exec(cmd, (err, stdout, stderr) => {
+          if (err) {
+            console.error(`Linux ${start ? 'start' : 'stop'} error: ${stderr}`);
+            if (stderr.includes('Permission denied')) {
+              console.error('This operation requires root privileges. Try running with sudo.');
+            }
+            reject(err);
+          } else {
+            console.log(`Service "${name}" ${start ? 'started' : 'stopped'} successfully on Linux.`);
+            resolve(stdout);
+          }
+        });
       });
     };
 
     // Platform-specific enable function
-    const enableService = () => {
-      if (platform === 'linux') {
-        if (!checkFileExists(servicePath, true, "enable")) return;
-        exec(`systemctl enable ${name}`, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`Linux service enable error: ${stderr}`);
-          } else {
-            console.log(`Service "${name}" enabled successfully on Linux.`);
+    const enableService = async () => {
+      return new Promise((resolve, reject) => {
+        if (platform === 'linux') {
+          if (!checkFileExists(servicePath, true, "enable")) {
+            return reject(new Error(`${servicePath} does not exist`));
           }
-        });
-      } else if (platform === 'darwin') {
-        if (!checkFileExists(plistPath, true, "enable")) return;
-        exec(`sudo launchctl bootstrap system /Library/LaunchDaemons/${name}.plist`, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`macOS service enable error: ${stderr}`);
-          } else {
-            console.log(`Service "${name}" enabled successfully on macOS.`);
+
+          // Check if we need sudo for system-level services
+          const needsSudo = servicePath.startsWith('/etc/');
+          const cmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name}`;
+
+          exec(cmd, (err, stdout, stderr) => {
+            if (err) {
+              console.error(`Linux service enable error: ${stderr}`);
+              if (stderr.includes('Permission denied')) {
+                console.error('This operation requires root privileges. Try running with sudo.');
+              }
+              reject(err);
+            } else {
+              console.log(`Service "${name}" enabled successfully on Linux.`);
+              resolve(stdout);
+            }
+          });
+        } else if (platform === 'darwin') {
+          if (!checkFileExists(plistPath, true, "enable")) {
+            return reject(new Error(`${plistPath} does not exist`));
           }
-        });
-      } else {
-        console.log("Enable action is not required or supported on this platform.");
-      }
+
+          // Check if we need sudo for system-level services
+          const needsSudo = plistPath.startsWith('/Library/');
+          const cmd = `${needsSudo ? 'sudo ' : ''}launchctl bootstrap system ${plistPath}`;
+
+          exec(cmd, (err, stdout, stderr) => {
+            if (err) {
+              console.error(`macOS service enable error: ${stderr}`);
+              if (stderr.includes('Permission denied')) {
+                console.error('This operation requires root privileges. Try running with sudo.');
+              }
+              reject(err);
+            } else {
+              console.log(`Service "${name}" enabled successfully on macOS.`);
+              resolve(stdout);
+            }
+          });
+        } else {
+          console.log("Enable action is not required or supported on this platform.");
+          resolve();
+        }
+      });
     };
 
     // Evaluate action and execute respective function
     if (action === 'register') {
-      if (platform === 'win32') windowsService(true);
-      else if (platform === 'darwin') macService(true);
-      else if (platform === 'linux') linuxService(true);
-      else console.error("Unsupported platform.");
+      if (platform === 'win32') {
+        return await windowsService(true, { name, description, command, env, working_dir });
+      } else if (platform === 'darwin') {
+        return await macService(true);
+      } else if (platform === 'linux') {
+        return await linuxService(true);
+      } else {
+        throw new Error("Unsupported platform.");
+      }
     } else if (action === 'unregister') {
-      if (platform === 'win32') windowsService(false);
-      else if (platform === 'darwin') macService(false);
-      else if (platform === 'linux') linuxService(false);
-      else console.error("Unsupported platform.");
+      if (platform === 'win32') {
+        return await windowsService(false, { name, description, command, env, working_dir });
+      } else if (platform === 'darwin') {
+        return await macService(false);
+      } else if (platform === 'linux') {
+        return await linuxService(false);
+      } else {
+        throw new Error("Unsupported platform.");
+      }
     } else if (action === 'start') {
-      if (platform === 'win32') windowsServiceStartStop(true);
-      else if (platform === 'darwin') macServiceStartStop(true);
-      else if (platform === 'linux') linuxServiceStartStop(true);
-      else console.error("Unsupported platform.");
+      if (platform === 'win32') {
+        return await windowsServiceStartStop(true);
+      } else if (platform === 'darwin') {
+        return await macServiceStartStop(true);
+      } else if (platform === 'linux') {
+        return await linuxServiceStartStop(true);
+      } else {
+        throw new Error("Unsupported platform.");
+      }
     } else if (action === 'stop') {
-      if (platform === 'win32') windowsServiceStartStop(false);
-      else if (platform === 'darwin') macServiceStartStop(false);
-      else if (platform === 'linux') linuxServiceStartStop(false);
-      else console.error("Unsupported platform.");
+      if (platform === 'win32') {
+        return await windowsServiceStartStop(false);
+      } else if (platform === 'darwin') {
+        return await macServiceStartStop(false);
+      } else if (platform === 'linux') {
+        return await linuxServiceStartStop(false);
+      } else {
+        throw new Error("Unsupported platform.");
+      }
     } else if (action === 'enable') {
-      enableService();
+      return await enableService();
+    } else if (action === 'status' || action === 'health' || action === 'inspect') {
+      // These actions are already handled above
+      // This is just to prevent the error message below
     } else {
-      console.error("Invalid action. Use 'register', 'unregister', 'start', 'stop', or 'enable'.");
+      throw new Error("Invalid action. Use 'register', 'unregister', 'start', 'stop', 'enable', 'status', 'health', or 'inspect'.");
     }
   } catch (error) {
     console.error('Service operation failed:', error.message);
