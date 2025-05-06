@@ -3,22 +3,22 @@ type: object
 properties:
   action:
     type: string
-    description: "The action to be performed on the service (register, unregister, start, stop)"
-    enum: ["register", "unregister", "start", "stop"]
+    description: "The operation to perform on the service"
+    enum: ["register", "unregister", "start", "stop", "enable", "status", "health"]
   name:
     type: string
-    description: "The name of the service"
+    description: "Service identifier"
   description:
     type: string
-    description: "A brief description of the service"
+    description: "Service description (required for registration)"
   command:
     type: array
-    description: "The command and arguments that start the service, as an array of strings"
+    description: "Command array to execute (required for registration)"
     items:
       type: string
   user:
     type: string
-    description: "User under which the service should run"
+    description: "User account to run the service"
   env:
     type: object
     description: "Environment variables for the service"
@@ -26,7 +26,7 @@ properties:
       type: string
   working_dir:
     type: string
-    description: "The working directory for the service"
+    description: "Working directory for the service"
 required:
   - action
   - name
