@@ -1,16 +1,16 @@
 name: service
 
 ai::name: "@fnet/service"
-npm::name: "@fnet/service"
 
 s::repo.url: https://gitlab.com/fnetai/service.git
 
 input: g::file://./fnet/input.yaml
 
 features:
-  app: false
   dts: true
-  t::dev::s::cli.fargs.default: dev
+  app: false
+  cli: false
+  # t::dev::s::cli.fargs.default: dev
 
 commands:
   register:

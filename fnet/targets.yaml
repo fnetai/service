@@ -1,7 +1,7 @@
 npm-default:
   type: npm
   enabled: true
-  version: "0.1.5"
+  version: "0.1.6"
   params:
     # bin: fnet-service
     name: "@fnet/service"
