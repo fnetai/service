@@ -193,14 +193,18 @@ const checkServiceHealth = async (name, platform) => {
 };
 
 // Enhance Windows service registration
-const windowsService = async (register, { name, description, command, env = {}, working_dir }) => {
+const windowsService = async (register, { name, description, command, env = {}, working_dir, autoStart = true, restartOnFailure = true }) => {
   if (register) {
     // Create a wrapper script for environment and working directory support
     const scriptPath = path.join(os.tmpdir(), `${name}-wrapper.cmd`);
     const scriptContent = createWindowsEnvScript(command, env, working_dir);
     fs.writeFileSync(scriptPath, scriptContent, 'utf8');
 
-    const serviceCmd = `sc create "${name}" binPath= "${scriptPath}" DisplayName= "${description}" start= auto`;
+    // Set the start type based on autoStart parameter
+    const startType = autoStart ? 'auto' : 'demand';
+
+    // Create the service with the appropriate start type
+    const serviceCmd = `sc create "${name}" binPath= "${scriptPath}" DisplayName= "${description}" start= ${startType}`;
 
     return new Promise((resolve, reject) => {
       exec(serviceCmd, (err, stdout, stderr) => {
@@ -208,8 +212,25 @@ const windowsService = async (register, { name, description, command, env = {}, 
           console.error(`Windows service error: ${stderr}`);
           reject(err);
         } else {
-          console.log(`Service "${name}" registered successfully on Windows.`);
-          resolve(stdout);
+          // If restartOnFailure is true, configure the service to restart on failure
+          if (restartOnFailure) {
+            // Configure service to restart after 30 seconds if it fails
+            const failureCmd = `sc failure "${name}" reset= 86400 actions= restart/30000`;
+            exec(failureCmd, (failErr, failStdout, failStderr) => {
+              if (failErr) {
+                console.error(`Windows service failure configuration error: ${failStderr}`);
+                // Don't reject here, as the service was created successfully
+                console.log(`Service "${name}" registered successfully on Windows, but failure recovery settings could not be applied.`);
+                resolve(stdout);
+              } else {
+                console.log(`Service "${name}" registered successfully on Windows with automatic restart on failure.`);
+                resolve(failStdout);
+              }
+            });
+          } else {
+            console.log(`Service "${name}" registered successfully on Windows.`);
+            resolve(stdout);
+          }
         }
       });
     });
@@ -236,7 +257,7 @@ const windowsService = async (register, { name, description, command, env = {}, 
 };
 
 // Add proper error handling and validation
-const validateConfig = ({ action, name, description, command, user, env, working_dir }) => {
+const validateConfig = ({ action, name, description, command, user, env, working_dir, autoStart, restartOnFailure, system_level }) => {
   const errors = [];
 
   if (!name?.trim()) errors.push('Service name is required');
@@ -248,6 +269,12 @@ const validateConfig = ({ action, name, description, command, user, env, working
     if (env && typeof env !== 'object') errors.push('Environment variables must be an object');
     // Validate user if provided
     if (user && typeof user !== 'string') errors.push('User must be a string');
+    // Validate autoStart if provided
+    if (autoStart !== undefined && typeof autoStart !== 'boolean') errors.push('autoStart must be a boolean');
+    // Validate restartOnFailure if provided
+    if (restartOnFailure !== undefined && typeof restartOnFailure !== 'boolean') errors.push('restartOnFailure must be a boolean');
+    // Validate system_level if provided
+    if (system_level !== undefined && typeof system_level !== 'boolean') errors.push('system_level must be a boolean');
   }
 
   if (errors.length > 0) {
@@ -265,6 +292,8 @@ const validateConfig = ({ action, name, description, command, user, env, working
  * @property {Record<string, string>} [env] - Environment variables for the service
  * @property {string} [working_dir] - Working directory for the service
  * @property {boolean} [system_level=true] - Whether to register as system-wide service (true) or user-level service (false)
+ * @property {boolean} [autoStart=false] - Whether to start the service automatically on registration or system startup
+ * @property {boolean} [restartOnFailure=false] - Whether to restart the service automatically if it fails or stops
  */
 
 /**
@@ -282,7 +311,7 @@ const validateConfig = ({ action, name, description, command, user, env, working
  * @returns {Promise<Output|void>} Returns status information for 'status', 'health', and 'inspect' actions
  * @throws {Error} Throws if configuration validation fails or operation errors occur
  * @example
- * // Register a new system-wide service
+ * // Register a new system-wide service with default startup behavior
  * await manageService({
  *   action: 'register',
  *   name: 'MyService',
@@ -290,6 +319,16 @@ const validateConfig = ({ action, name, description, command, user, env, working
  *   command: ['node', '/path/to/app.js'],
  *   env: { NODE_ENV: 'production' },
  *   system_level: true
+ * });
+ *
+ * // Register a service that doesn't start automatically and doesn't restart on failure
+ * await manageService({
+ *   action: 'register',
+ *   name: 'MyManualService',
+ *   description: 'Service that requires manual start',
+ *   command: ['node', '/path/to/app.js'],
+ *   autoStart: false,
+ *   restartOnFailure: false
  * });
  *
  * // Register a user-level service
@@ -321,7 +360,18 @@ export default async (config) => {
   try {
     validateConfig(config);
 
-    const { action, name, env = {}, description, command, working_dir, user, system_level = true } = config;
+    const {
+      action,
+      name,
+      env = {},
+      description,
+      command,
+      working_dir,
+      user,
+      system_level = true,
+      autoStart = true,
+      restartOnFailure = true
+    } = config;
     const platform = os.platform();
 
     // Add status check action
@@ -401,9 +451,9 @@ export default async (config) => {
                 ${escapedCommandArgs.map(arg => `<string>${arg}</string>`).join('\n')}
               </array>
               <key>RunAtLoad</key>
-              <true/>
+              <${autoStart ? 'true' : 'false'}/>
               <key>KeepAlive</key>
-              <true/>
+              <${restartOnFailure ? 'true' : 'false'}/>
               ${working_dir ? `<key>WorkingDirectory</key><string>${path.resolve(working_dir)}</string>` : ''}
               ${user ? `<key>UserName</key><string>${user}</string>` : ''}
               ${Object.keys(env).length ? `<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join('\n')}</dict>` : ''}
@@ -475,7 +525,7 @@ export default async (config) => {
 
           [Service]
           ExecStart=${escapedCommand}
-          Restart=always
+          Restart=${restartOnFailure ? 'always' : 'no'}
           ${user ? `User=${user}` : `User=${process.env.USER}`}
           ${working_dir ? `WorkingDirectory=${path.resolve(working_dir)}` : ''}
           ${formattedEnv ? `Environment="${formattedEnv}"` : ''}
@@ -488,7 +538,14 @@ export default async (config) => {
 
             // Check if we need sudo for system-level services
             const needsSudo = servicePath.startsWith('/etc/');
-            const enableCmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name} && ${needsSudo ? 'sudo ' : ''}systemctl start ${name}`;
+
+            // Build the command based on autoStart parameter
+            let enableCmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name}`;
+
+            // Only start the service if autoStart is true
+            if (autoStart) {
+              enableCmd += ` && ${needsSudo ? 'sudo ' : ''}systemctl start ${name}`;
+            }
 
             exec(enableCmd, (err, stdout, stderr) => {
               if (err) {
@@ -661,7 +718,7 @@ export default async (config) => {
     // Evaluate action and execute respective function
     if (action === 'register') {
       if (platform === 'win32') {
-        return await windowsService(true, { name, description, command, env, working_dir });
+        return await windowsService(true, { name, description, command, env, working_dir, autoStart, restartOnFailure });
       } else if (platform === 'darwin') {
         return await macService(true);
       } else if (platform === 'linux') {
