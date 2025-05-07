@@ -6,11 +6,6 @@
 import os from 'node:os';
 import fs from 'node:fs';
 
-// Import platform-specific implementations
-import * as windowsImpl from './windows.js';
-import * as macosImpl from './macos.js';
-import * as linuxImpl from './linux.js';
-
 // Re-export service status constants
 export const ServiceStatus = {
   RUNNING: 'running',
@@ -95,20 +90,24 @@ export default async (config) => {
 
     const platform = os.platform();
 
-    // Get the platform-specific implementation
+    // Dynamically import the platform-specific implementation
     let platformImpl;
-    switch (platform) {
-      case 'win32':
-        platformImpl = windowsImpl;
-        break;
-      case 'darwin':
-        platformImpl = macosImpl;
-        break;
-      case 'linux':
-        platformImpl = linuxImpl;
-        break;
-      default:
-        throw new Error(`Unsupported platform: ${platform}`);
+    try {
+      switch (platform) {
+        case 'win32':
+          platformImpl = await import('./windows.js');
+          break;
+        case 'darwin':
+          platformImpl = await import('./macos.js');
+          break;
+        case 'linux':
+          platformImpl = await import('./linux.js');
+          break;
+        default:
+          throw new Error(`Unsupported platform: ${platform}`);
+      }
+    } catch (error) {
+      throw new Error(`Failed to load platform-specific implementation: ${error.message}`);
     }
 
     // Add status check action
