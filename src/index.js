@@ -611,31 +611,109 @@ export default async (config) => {
         // Check if we need sudo for system-level services
         const needsSudo = plistPath.startsWith('/Library/');
 
-        // For macOS, use load/unload with -w flag for more reliable control
-        // This is more consistent with how launchd actually works
-        let cmd;
-        if (start) {
-          // To start a service in macOS, we load the plist file
-          // The -w flag ensures it stays enabled across reboots
-          cmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
+        // Determine the domain based on system_level
+        let domain;
+        if (system_level) {
+          domain = 'system';
         } else {
-          // To stop a service in macOS, we unload the plist file
-          // The -w flag ensures it stays disabled across reboots
-          cmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath}`;
+          // For user-level services, use the current user's UID
+          domain = `gui/$(id -u)`;
         }
 
-        exec(cmd, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`macOS ${start ? 'start' : 'stop'} error: ${stderr}`);
-            if (stderr.includes('Permission denied')) {
-              console.error('This operation requires root privileges. Try running with sudo.');
+        let cmd;
+        if (start) {
+          // First try to start the service using the label (modern approach)
+          cmd = `${needsSudo ? 'sudo ' : ''}launchctl start ${name}`;
+
+          exec(cmd, (err, stdout, stderr) => {
+            if (err) {
+              // If start fails, try loading the plist file
+              console.log(`launchctl start failed, trying to load the plist...`);
+
+              // Modern approach (macOS 11+): Use bootstrap to load the service
+              let loadCmd;
+              if (needsSudo) {
+                loadCmd = `${needsSudo ? 'sudo ' : ''}launchctl bootstrap ${domain} ${plistPath}`;
+              } else {
+                loadCmd = `launchctl bootstrap ${domain} ${plistPath}`;
+              }
+
+              exec(loadCmd, (loadErr, loadStdout, loadStderr) => {
+                if (loadErr) {
+                  // If bootstrap fails, try the legacy approach with load
+                  console.log(`Modern launchctl bootstrap failed, trying legacy load...`);
+
+                  const legacyCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
+
+                  exec(legacyCmd, (legacyErr, legacyStdout, legacyStderr) => {
+                    if (legacyErr) {
+                      console.error(`macOS start error: ${legacyStderr}`);
+                      if (legacyStderr.includes('Permission denied')) {
+                        console.error('This operation requires root privileges. Try running with sudo.');
+                      }
+                      reject(legacyErr);
+                    } else {
+                      console.log(`Service "${name}" started successfully on macOS (legacy method).`);
+                      resolve(legacyStdout);
+                    }
+                  });
+                } else {
+                  console.log(`Service "${name}" started successfully on macOS.`);
+                  resolve(loadStdout);
+                }
+              });
+            } else {
+              console.log(`Service "${name}" started successfully on macOS.`);
+              resolve(stdout);
             }
-            reject(err);
-          } else {
-            console.log(`Service "${name}" ${start ? 'started' : 'stopped'} successfully on macOS.`);
-            resolve(stdout);
-          }
-        });
+          });
+        } else {
+          // First try to stop the service using the label
+          cmd = `${needsSudo ? 'sudo ' : ''}launchctl stop ${name}`;
+
+          exec(cmd, (err, stdout, stderr) => {
+            if (err) {
+              // If stop fails, try unloading the plist file
+              console.log(`launchctl stop failed, trying to unload the plist...`);
+
+              // Modern approach (macOS 11+): Use bootout to unload the service
+              let unloadCmd;
+              if (needsSudo) {
+                unloadCmd = `${needsSudo ? 'sudo ' : ''}launchctl bootout ${domain} ${plistPath}`;
+              } else {
+                unloadCmd = `launchctl bootout ${domain} ${plistPath}`;
+              }
+
+              exec(unloadCmd, (unloadErr, unloadStdout, unloadStderr) => {
+                if (unloadErr) {
+                  // If bootout fails, try the legacy approach with unload
+                  console.log(`Modern launchctl bootout failed, trying legacy unload...`);
+
+                  const legacyCmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath}`;
+
+                  exec(legacyCmd, (legacyErr, legacyStdout, legacyStderr) => {
+                    if (legacyErr) {
+                      console.error(`macOS stop error: ${legacyStderr}`);
+                      if (legacyStderr.includes('Permission denied')) {
+                        console.error('This operation requires root privileges. Try running with sudo.');
+                      }
+                      reject(legacyErr);
+                    } else {
+                      console.log(`Service "${name}" stopped successfully on macOS (legacy method).`);
+                      resolve(legacyStdout);
+                    }
+                  });
+                } else {
+                  console.log(`Service "${name}" stopped successfully on macOS.`);
+                  resolve(unloadStdout);
+                }
+              });
+            } else {
+              console.log(`Service "${name}" stopped successfully on macOS.`);
+              resolve(stdout);
+            }
+          });
+        }
       });
     };
 
@@ -692,17 +770,37 @@ export default async (config) => {
           // Check if we need sudo for system-level services
           const needsSudo = plistPath.startsWith('/Library/');
 
-          // For macOS, the proper way to enable a service is to load it with the -w flag
-          // This ensures the service is loaded now and will be loaded on system startup
-          const cmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
+          // Determine the domain based on system_level
+          let domain;
+          if (system_level) {
+            domain = 'system';
+          } else {
+            // For user-level services, use the current user's UID
+            domain = `gui/$(id -u)`;
+          }
 
-          exec(cmd, (err, stdout, stderr) => {
+          // Modern approach (macOS 11+): Use enable to enable the service
+          const enableCmd = `${needsSudo ? 'sudo ' : ''}launchctl enable ${domain}/${name}`;
+
+          exec(enableCmd, (err, stdout, stderr) => {
             if (err) {
-              console.error(`macOS service enable error: ${stderr}`);
-              if (stderr.includes('Permission denied')) {
-                console.error('This operation requires root privileges. Try running with sudo.');
-              }
-              reject(err);
+              // If enable fails, try the legacy approach with load -w
+              console.log(`Modern launchctl enable failed, trying legacy load -w...`);
+
+              const legacyCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
+
+              exec(legacyCmd, (legacyErr, legacyStdout, legacyStderr) => {
+                if (legacyErr) {
+                  console.error(`macOS service enable error: ${legacyStderr}`);
+                  if (legacyStderr.includes('Permission denied')) {
+                    console.error('This operation requires root privileges. Try running with sudo.');
+                  }
+                  reject(legacyErr);
+                } else {
+                  console.log(`Service "${name}" enabled successfully on macOS (legacy method).`);
+                  resolve(legacyStdout);
+                }
+              });
             } else {
               console.log(`Service "${name}" enabled successfully on macOS.`);
               resolve(stdout);
