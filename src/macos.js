@@ -96,7 +96,7 @@ export const inspectServiceConfig = async (name) => {
     // Check both system and user locations
     const systemPlistPath = `/Library/LaunchDaemons/${name}.plist`;
     const userPlistPath = `${os.homedir()}/Library/LaunchAgents/${name}.plist`;
-    
+
     let configPath;
     if (fs.existsSync(systemPlistPath)) {
       configPath = systemPlistPath;
@@ -105,7 +105,7 @@ export const inspectServiceConfig = async (name) => {
     } else {
       throw new Error(`Service configuration for "${name}" not found in standard locations.`);
     }
-    
+
     try {
       const configContent = fs.readFileSync(configPath, 'utf8');
       return {
@@ -130,9 +130,9 @@ export const inspectServiceConfig = async (name) => {
  * @param {Object} options - Service options
  * @returns {Promise<string>} - Command output
  */
-export const manageService = async (register, { name, description, command, env = {}, working_dir, user, system_level = true, autoStart = true, restartOnFailure = true }) => {
-  // Define plist path based on system_level
-  const plistPath = system_level 
+export const manageService = async (register, { name, description, command, env = {}, wdir, user, system = true, autoStart = true, restartOnFailure = true }) => {
+  // Define plist path based on system
+  const plistPath = system
     ? `/Library/LaunchDaemons/${name}.plist`
     : `${os.homedir()}/Library/LaunchAgents/${name}.plist`;
 
@@ -144,7 +144,7 @@ export const manageService = async (register, { name, description, command, env 
 
       // Escape special characters in command arguments
       const escapedCommandArgs = command.map(arg => arg.replace(/(["\s'$`\\])/g, '\\$1'));
-      
+
       const plistContent = `
       <?xml version="1.0" encoding="UTF-8"?>
       <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -160,19 +160,19 @@ export const manageService = async (register, { name, description, command, env 
           <${autoStart ? 'true' : 'false'}/>
           <key>KeepAlive</key>
           <${restartOnFailure ? 'true' : 'false'}/>
-          ${working_dir ? `<key>WorkingDirectory</key><string>${path.resolve(working_dir)}</string>` : ''}
+          ${wdir ? `<key>WorkingDirectory</key><string>${path.resolve(wdir)}</string>` : ''}
           ${user ? `<key>UserName</key><string>${user}</string>` : ''}
           ${Object.keys(env).length ? `<key>EnvironmentVariables</key><dict>${Object.entries(env).map(([k, v]) => `<key>${k}</key><string>${v}</string>`).join('\n')}</dict>` : ''}
         </dict>
       </plist>`;
-      
+
       try {
         fs.writeFileSync(plistPath, plistContent);
-        
+
         // Check if we need sudo for system-level services
         const needsSudo = plistPath.startsWith('/Library/');
         const loadCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
-        
+
         exec(loadCmd, (err, stdout, stderr) => {
           if (err) {
             console.error(`macOS service error: ${stderr}`);
@@ -196,7 +196,7 @@ export const manageService = async (register, { name, description, command, env 
       // Check if we need sudo for system-level services
       const needsSudo = plistPath.startsWith('/Library/');
       const unloadCmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath} && ${needsSudo ? 'sudo ' : ''}rm ${plistPath}`;
-      
+
       exec(unloadCmd, (err, stdout, stderr) => {
         if (err) {
           console.error(`macOS service error: ${stderr}`);
@@ -217,12 +217,12 @@ export const manageService = async (register, { name, description, command, env 
  * Start or stop a macOS service
  * @param {boolean} start - Whether to start (true) or stop (false) the service
  * @param {string} name - Service name
- * @param {boolean} system_level - Whether the service is system-wide
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<string>} - Command output
  */
-export const startStopService = async (start, name, system_level = true) => {
-  // Define plist path based on system_level
-  const plistPath = system_level 
+export const startStopService = async (start, name, system = true) => {
+  // Define plist path based on system
+  const plistPath = system
     ? `/Library/LaunchDaemons/${name}.plist`
     : `${os.homedir()}/Library/LaunchAgents/${name}.plist`;
 
@@ -230,29 +230,29 @@ export const startStopService = async (start, name, system_level = true) => {
     if (!checkFileExists(plistPath, true, start ? "start" : "stop")) {
       return reject(new Error(`${plistPath} does not exist`));
     }
-    
+
     // Check if we need sudo for system-level services
     const needsSudo = plistPath.startsWith('/Library/');
-    
-    // Determine the domain based on system_level
+
+    // Determine the domain based on system
     let domain;
-    if (system_level) {
+    if (system) {
       domain = 'system';
     } else {
       // For user-level services, use the current user's UID
       domain = `gui/$(id -u)`;
     }
-    
+
     let cmd;
     if (start) {
       // First try to start the service using the label (modern approach)
       cmd = `${needsSudo ? 'sudo ' : ''}launchctl start ${name}`;
-      
+
       exec(cmd, (err, stdout) => {
         if (err) {
           // If start fails, try loading the plist file
           console.log(`launchctl start failed, trying to load the plist...`);
-          
+
           // Modern approach (macOS 11+): Use bootstrap to load the service
           let loadCmd;
           if (needsSudo) {
@@ -260,14 +260,14 @@ export const startStopService = async (start, name, system_level = true) => {
           } else {
             loadCmd = `launchctl bootstrap ${domain} ${plistPath}`;
           }
-          
+
           exec(loadCmd, (loadErr, loadStdout) => {
             if (loadErr) {
               // If bootstrap fails, try the legacy approach with load
               console.log(`Modern launchctl bootstrap failed, trying legacy load...`);
-              
+
               const legacyCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
-              
+
               exec(legacyCmd, (legacyErr, legacyStdout, legacyStderr) => {
                 if (legacyErr) {
                   console.error(`macOS start error: ${legacyStderr}`);
@@ -293,12 +293,12 @@ export const startStopService = async (start, name, system_level = true) => {
     } else {
       // First try to stop the service using the label
       cmd = `${needsSudo ? 'sudo ' : ''}launchctl stop ${name}`;
-      
+
       exec(cmd, (err, stdout) => {
         if (err) {
           // If stop fails, try unloading the plist file
           console.log(`launchctl stop failed, trying to unload the plist...`);
-          
+
           // Modern approach (macOS 11+): Use bootout to unload the service
           let unloadCmd;
           if (needsSudo) {
@@ -306,14 +306,14 @@ export const startStopService = async (start, name, system_level = true) => {
           } else {
             unloadCmd = `launchctl bootout ${domain} ${plistPath}`;
           }
-          
+
           exec(unloadCmd, (unloadErr, unloadStdout) => {
             if (unloadErr) {
               // If bootout fails, try the legacy approach with unload
               console.log(`Modern launchctl bootout failed, trying legacy unload...`);
-              
+
               const legacyCmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath}`;
-              
+
               exec(legacyCmd, (legacyErr, legacyStdout, legacyStderr) => {
                 if (legacyErr) {
                   console.error(`macOS stop error: ${legacyStderr}`);
@@ -343,12 +343,12 @@ export const startStopService = async (start, name, system_level = true) => {
 /**
  * Enable a macOS service
  * @param {string} name - Service name
- * @param {boolean} system_level - Whether the service is system-wide
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<string>} - Command output
  */
-export const enableService = async (name, system_level = true) => {
-  // Define plist path based on system_level
-  const plistPath = system_level 
+export const enableService = async (name, system = true) => {
+  // Define plist path based on system
+  const plistPath = system
     ? `/Library/LaunchDaemons/${name}.plist`
     : `${os.homedir()}/Library/LaunchAgents/${name}.plist`;
 
@@ -356,29 +356,29 @@ export const enableService = async (name, system_level = true) => {
     if (!checkFileExists(plistPath, true, "enable")) {
       return reject(new Error(`${plistPath} does not exist`));
     }
-    
+
     // Check if we need sudo for system-level services
     const needsSudo = plistPath.startsWith('/Library/');
-    
-    // Determine the domain based on system_level
+
+    // Determine the domain based on system
     let domain;
-    if (system_level) {
+    if (system) {
       domain = 'system';
     } else {
       // For user-level services, use the current user's UID
       domain = `gui/$(id -u)`;
     }
-    
+
     // Modern approach (macOS 11+): Use enable to enable the service
     const enableCmd = `${needsSudo ? 'sudo ' : ''}launchctl enable ${domain}/${name}`;
-    
+
     exec(enableCmd, (err, stdout) => {
       if (err) {
         // If enable fails, try the legacy approach with load -w
         console.log(`Modern launchctl enable failed, trying legacy load -w...`);
-        
+
         const legacyCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
-        
+
         exec(legacyCmd, (legacyErr, legacyStdout, legacyStderr) => {
           if (legacyErr) {
             console.error(`macOS service enable error: ${legacyStderr}`);

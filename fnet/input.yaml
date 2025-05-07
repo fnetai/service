@@ -24,17 +24,21 @@ properties:
     description: "Environment variables for the service"
     additionalProperties:
       type: string
-  working_dir:
+  wdir:
     type: string
     description: "Working directory for the service"
   autoStart:
     type: boolean
     description: "Whether to start the service automatically on registration or system startup"
-    default: false
+    default: true
   restartOnFailure:
     type: boolean
     description: "Whether to restart the service automatically if it fails or stops"
-    default: false
+    default: true
+  system:
+    type: boolean
+    description: "Whether to register as system-wide service (true) or user-level service (false)"
+    default: true
 required:
   - action
   - name

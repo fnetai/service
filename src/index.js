@@ -22,8 +22,8 @@ export const ServiceStatus = {
  * @property {string[]} [command] - Command array to execute (required for registration)
  * @property {string} [user] - User account to run the service
  * @property {Record<string, string>} [env] - Environment variables for the service
- * @property {string} [working_dir] - Working directory for the service
- * @property {boolean} [system_level=true] - Whether to register as system-wide service (true) or user-level service (false)
+ * @property {string} [wdir] - Working directory for the service
+ * @property {boolean} [system=true] - Whether to register as system-wide service (true) or user-level service (false)
  * @property {boolean} [autoStart=true] - Whether to start the service automatically on registration or system startup
  * @property {boolean} [restartOnFailure=true] - Whether to restart the service automatically if it fails or stops
  */
@@ -37,14 +37,14 @@ export const ServiceStatus = {
  */
 
 // Add proper error handling and validation
-const validateConfig = ({ action, name, description, command, user, env, working_dir, autoStart, restartOnFailure, system_level }) => {
+const validateConfig = ({ action, name, description, command, user, env, wdir, autoStart, restartOnFailure, system }) => {
   const errors = [];
 
   if (!name?.trim()) errors.push('Service name is required');
   if (action === 'register') {
     if (!description?.trim()) errors.push('Service description is required');
     if (!Array.isArray(command) || command.length === 0) errors.push('Command array is required');
-    if (working_dir && !fs.existsSync(working_dir)) errors.push('Working directory does not exist');
+    if (wdir && !fs.existsSync(wdir)) errors.push('Working directory does not exist');
     // Validate environment variables if provided
     if (env && typeof env !== 'object') errors.push('Environment variables must be an object');
     // Validate user if provided
@@ -53,8 +53,8 @@ const validateConfig = ({ action, name, description, command, user, env, working
     if (autoStart !== undefined && typeof autoStart !== 'boolean') errors.push('autoStart must be a boolean');
     // Validate restartOnFailure if provided
     if (restartOnFailure !== undefined && typeof restartOnFailure !== 'boolean') errors.push('restartOnFailure must be a boolean');
-    // Validate system_level if provided
-    if (system_level !== undefined && typeof system_level !== 'boolean') errors.push('system_level must be a boolean');
+    // Validate system if provided
+    if (system !== undefined && typeof system !== 'boolean') errors.push('system must be a boolean');
   }
 
   if (errors.length > 0) {
@@ -81,9 +81,9 @@ export default async (config) => {
       env = {},
       description,
       command,
-      working_dir,
+      wdir,
       user,
-      system_level = true,
+      system = true,
       autoStart = true,
       restartOnFailure = true
     } = config;
@@ -132,9 +132,9 @@ export default async (config) => {
         description,
         command,
         env,
-        working_dir,
+        wdir,
         user,
-        system_level,
+        system,
         autoStart,
         restartOnFailure
       });
@@ -144,16 +144,16 @@ export default async (config) => {
         description,
         command,
         env,
-        working_dir,
+        wdir,
         user,
-        system_level
+        system
       });
     } else if (action === 'start') {
-      return await platformImpl.startStopService(true, name, system_level);
+      return await platformImpl.startStopService(true, name, system);
     } else if (action === 'stop') {
-      return await platformImpl.startStopService(false, name, system_level);
+      return await platformImpl.startStopService(false, name, system);
     } else if (action === 'enable') {
-      return await platformImpl.enableService(name, system_level);
+      return await platformImpl.enableService(name, system);
     } else if (action === 'status' || action === 'health' || action === 'inspect') {
       // These actions are already handled above
       // This is just to prevent the error message below

@@ -19,12 +19,12 @@ export const ServiceStatus = {
  * Creates a Windows batch script that sets environment variables and changes directory before running the command
  * @param {string[]} command - Command array to execute
  * @param {Record<string, string>} env - Environment variables
- * @param {string} [working_dir] - Working directory
+ * @param {string} [wdir] - Working directory
  * @returns {string} - Windows batch script content
  */
-const createWindowsEnvScript = (command, env = {}, working_dir) => {
+const createWindowsEnvScript = (command, env = {}, wdir) => {
   const envVars = Object.entries(env).map(([key, value]) => `SET ${key}=${value}`).join(' && ');
-  const cdCommand = working_dir ? `cd /d "${working_dir}" && ` : '';
+  const cdCommand = wdir ? `cd /d "${wdir}" && ` : '';
   return `${envVars} && ${cdCommand}${command.join(' ')}`;
 };
 
@@ -94,16 +94,16 @@ export const inspectServiceConfig = async (name) => {
  * @param {Object} options - Service options
  * @returns {Promise<string>} - Command output
  */
-export const manageService = async (register, { name, description, command, env = {}, working_dir, autoStart = true, restartOnFailure = true }) => {
+export const manageService = async (register, { name, description, command, env = {}, wdir, autoStart = true, restartOnFailure = true }) => {
   if (register) {
     // Create a wrapper script for environment and working directory support
     const scriptPath = path.join(os.tmpdir(), `${name}-wrapper.cmd`);
-    const scriptContent = createWindowsEnvScript(command, env, working_dir);
+    const scriptContent = createWindowsEnvScript(command, env, wdir);
     fs.writeFileSync(scriptPath, scriptContent, 'utf8');
 
     // Set the start type based on autoStart parameter
     const startType = autoStart ? 'auto' : 'demand';
-    
+
     // Create the service with the appropriate start type
     const serviceCmd = `sc create "${name}" binPath= "${scriptPath}" DisplayName= "${description}" start= ${startType}`;
 

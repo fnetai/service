@@ -22,13 +22,16 @@ The primary export of the library is a function that allows you to control servi
 
 ### Parameters
 
-- `action`: The operation to perform (`register`, `unregister`, `start`, `stop`, `enable`, `status`, `health`)
+- `action`: The operation to perform (`register`, `unregister`, `start`, `stop`, `enable`, `status`, `health`, `inspect`)
 - `name`: The name of the service
 - `description`: A brief description of the service (required for registration)
 - `command`: An array of command-line arguments to run the service (required for registration)
 - `user`: The user under whose account the service will run (optional)
 - `env`: An object defining environment variables for the service (optional)
-- `working_dir`: The working directory for the service (optional)
+- `wdir`: The working directory for the service (optional)
+- `system`: Whether to register as system-wide service (true) or user-level service (false) (default: true)
+- `autoStart`: Whether to start the service automatically on registration or system startup (default: true)
+- `restartOnFailure`: Whether to restart the service automatically if it fails or stops (default: true)
 
 ### Example Usages
 
@@ -37,6 +40,7 @@ Registering a new service:
 ```javascript
 import manageService from '@fnet/service';
 
+// Register a service with default settings (autoStart: true, restartOnFailure: true)
 await manageService({
     action: 'register',
     name: 'MyService',
@@ -44,7 +48,26 @@ await manageService({
     command: ['node', '/path/to/app.js'],
     user: 'serviceUser',
     env: { NODE_ENV: 'production' },
-    working_dir: '/path/to/working/directory'
+    wdir: '/path/to/working/directory'
+});
+
+// Register a service that doesn't start automatically and doesn't restart on failure
+await manageService({
+    action: 'register',
+    name: 'MyManualService',
+    description: 'Service that requires manual start',
+    command: ['node', '/path/to/app.js'],
+    autoStart: false,
+    restartOnFailure: false
+});
+
+// Register a user-level service instead of system-wide
+await manageService({
+    action: 'register',
+    name: 'MyUserService',
+    description: 'User-level service',
+    command: ['node', '/path/to/app.js'],
+    system: false
 });
 ```
 
@@ -83,6 +106,23 @@ const health = await manageService({
 // }
 ```
 
+Inspecting service configuration:
+
+```javascript
+const config = await manageService({
+    action: 'inspect',
+    name: 'MyService'
+});
+// Returns: {
+//   name: string,
+//   platform: 'win32' | 'darwin' | 'linux',
+//   configType: string,
+//   configPath?: string,
+//   configContent: string,
+//   timestamp: string
+// }
+```
+
 Enabling service auto-start:
 
 ```javascript
@@ -107,20 +147,26 @@ await manageService({
 
 - Uses Windows Service Control (`sc`) commands
 - Supports environment variables and working directory through wrapper scripts
-- Full service status monitoring
+- Configurable startup behavior with `autoStart` parameter
+- Configurable failure recovery with `restartOnFailure` parameter
+- Full service status monitoring and configuration inspection
 
 ### macOS
 
-- Uses `launchctl` and `.plist` files in `/Library/LaunchDaemons/`
-- Supports `RunAtLoad` and `KeepAlive` options
+- Uses `launchctl` and `.plist` files
+- System-wide services in `/Library/LaunchDaemons/` or user-level in `~/Library/LaunchAgents/`
+- Supports both modern (macOS 11+) and legacy launchctl commands
+- Configurable `RunAtLoad` (via `autoStart`) and `KeepAlive` (via `restartOnFailure`) options
 - Environment variables and working directory support
+- Service configuration inspection
 
 ### Linux
 
 - Uses `systemd` service management
-- Services stored in `/etc/systemd/system/`
-- Automatic restart on failure
-- Detailed status and health monitoring with journalctl integration
+- System-wide services in `/etc/systemd/system/` or user-level in `~/.config/systemd/user/`
+- Configurable automatic startup with `autoStart` parameter
+- Configurable restart behavior with `restartOnFailure` parameter
+- Detailed status, health monitoring, and configuration inspection with journalctl integration
 
 ## Error Handling
 
@@ -138,11 +184,15 @@ When errors occur, the library throws an Error with a descriptive message. For s
 
 1. Always provide descriptive service names and descriptions
 2. Set appropriate user permissions for security
-3. Configure working directories when needed
+3. Configure working directories when needed using the `wdir` parameter
 4. Handle environment variables appropriately
-5. Implement proper error handling in your code
-6. Monitor service health regularly
-7. Clean up services properly using unregister when no longer needed
+5. Consider whether services should start automatically using the `autoStart` parameter
+6. Configure appropriate restart behavior using the `restartOnFailure` parameter
+7. Choose between system-wide and user-level services using the `system` parameter
+8. Implement proper error handling in your code
+9. Monitor service health regularly
+10. Inspect service configurations when troubleshooting
+11. Clean up services properly using unregister when no longer needed
 
 ## Acknowledgement
 

@@ -72,7 +72,7 @@ export const checkServiceHealth = async (name) => {
     if (status === ServiceStatus.FAILED) {
       // Get service logs for diagnostics
       const logs = execSync(`journalctl -u "${name}" --no-pager -n 50`).toString();
-      
+
       return {
         healthy: false,
         status,
@@ -80,7 +80,7 @@ export const checkServiceHealth = async (name) => {
         timestamp: new Date().toISOString()
       };
     }
-    
+
     return {
       healthy: status === ServiceStatus.RUNNING,
       status,
@@ -106,7 +106,7 @@ export const inspectServiceConfig = async (name) => {
     // Check both system and user locations
     const systemServicePath = `/etc/systemd/system/${name}.service`;
     const userServicePath = `${os.homedir()}/.config/systemd/user/${name}.service`;
-    
+
     let configPath;
     if (fs.existsSync(systemServicePath)) {
       configPath = systemServicePath;
@@ -115,7 +115,7 @@ export const inspectServiceConfig = async (name) => {
     } else {
       throw new Error(`Service configuration for "${name}" not found in standard locations.`);
     }
-    
+
     try {
       const configContent = fs.readFileSync(configPath, 'utf8');
       return {
@@ -140,13 +140,13 @@ export const inspectServiceConfig = async (name) => {
  * @param {Object} options - Service options
  * @returns {Promise<string>} - Command output
  */
-export const manageService = async (register, { name, description, command, env = {}, working_dir, user, system_level = true, autoStart = true, restartOnFailure = true }) => {
+export const manageService = async (register, { name, description, command, env = {}, wdir, user, system = true, autoStart = true, restartOnFailure = true }) => {
   // Format environment variables for service files
   const formattedEnv = Object.entries(env).map(([key, value]) => `${key}=${value}`).join(' ');
-  
-  // Define service path based on system_level
+
+  // Define service path based on system
   let servicePath;
-  if (system_level) {
+  if (system) {
     servicePath = `/etc/systemd/system/${name}.service`;
   } else {
     // For Linux, use user-level systemd directory
@@ -157,7 +157,7 @@ export const manageService = async (register, { name, description, command, env 
     }
     servicePath = `${userSystemdDir}/${name}.service`;
   }
-  
+
   return new Promise((resolve, reject) => {
     if (register) {
       if (!checkFileExists(servicePath, false, "register")) {
@@ -166,7 +166,7 @@ export const manageService = async (register, { name, description, command, env 
 
       // Escape special characters in command arguments
       const escapedCommand = command.map(arg => arg.replace(/(["\s'$`\\])/g, '\\$1')).join(' ');
-      
+
       const serviceContent = `
       [Unit]
       Description=${description}
@@ -176,26 +176,26 @@ export const manageService = async (register, { name, description, command, env 
       ExecStart=${escapedCommand}
       Restart=${restartOnFailure ? 'always' : 'no'}
       ${user ? `User=${user}` : `User=${process.env.USER}`}
-      ${working_dir ? `WorkingDirectory=${path.resolve(working_dir)}` : ''}
+      ${wdir ? `WorkingDirectory=${path.resolve(wdir)}` : ''}
       ${formattedEnv ? `Environment="${formattedEnv}"` : ''}
 
       [Install]
       WantedBy=multi-user.target`;
-      
+
       try {
         fs.writeFileSync(servicePath, serviceContent);
-        
+
         // Check if we need sudo for system-level services
         const needsSudo = servicePath.startsWith('/etc/');
-        
+
         // Build the command based on autoStart parameter
         let enableCmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name}`;
-        
+
         // Only start the service if autoStart is true
         if (autoStart) {
           enableCmd += ` && ${needsSudo ? 'sudo ' : ''}systemctl start ${name}`;
         }
-        
+
         exec(enableCmd, (err, stdout, stderr) => {
           if (err) {
             console.error(`Linux service error: ${stderr}`);
@@ -219,7 +219,7 @@ export const manageService = async (register, { name, description, command, env 
       // Check if we need sudo for system-level services
       const needsSudo = servicePath.startsWith('/etc/');
       const disableCmd = `${needsSudo ? 'sudo ' : ''}systemctl stop ${name} && ${needsSudo ? 'sudo ' : ''}systemctl disable ${name} && ${needsSudo ? 'sudo ' : ''}rm ${servicePath}`;
-      
+
       exec(disableCmd, (err, stdout, stderr) => {
         if (err) {
           console.error(`Linux service error: ${stderr}`);
@@ -240,15 +240,15 @@ export const manageService = async (register, { name, description, command, env 
  * Start or stop a Linux service
  * @param {boolean} start - Whether to start (true) or stop (false) the service
  * @param {string} name - Service name
- * @param {boolean} system_level - Whether the service is system-wide
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<string>} - Command output
  */
-export const startStopService = async (start, name, system_level = true) => {
+export const startStopService = async (start, name, system = true) => {
   return new Promise((resolve, reject) => {
     // Check if we need sudo for system-level services
-    const needsSudo = system_level;
+    const needsSudo = system;
     const cmd = `${needsSudo ? 'sudo ' : ''}systemctl ${start ? 'start' : 'stop'} ${name}`;
-    
+
     exec(cmd, (err, stdout, stderr) => {
       if (err) {
         console.error(`Linux ${start ? 'start' : 'stop'} error: ${stderr}`);
@@ -267,24 +267,24 @@ export const startStopService = async (start, name, system_level = true) => {
 /**
  * Enable a Linux service
  * @param {string} name - Service name
- * @param {boolean} system_level - Whether the service is system-wide
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<string>} - Command output
  */
-export const enableService = async (name, system_level = true) => {
-  // Define service path based on system_level
-  const servicePath = system_level 
+export const enableService = async (name, system = true) => {
+  // Define service path based on system
+  const servicePath = system
     ? `/etc/systemd/system/${name}.service`
     : `${os.homedir()}/.config/systemd/user/${name}.service`;
-  
+
   return new Promise((resolve, reject) => {
     if (!checkFileExists(servicePath, true, "enable")) {
       return reject(new Error(`${servicePath} does not exist`));
     }
-    
+
     // Check if we need sudo for system-level services
     const needsSudo = servicePath.startsWith('/etc/');
     const cmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name}`;
-    
+
     exec(cmd, (err, stdout, stderr) => {
       if (err) {
         console.error(`Linux service enable error: ${stderr}`);
