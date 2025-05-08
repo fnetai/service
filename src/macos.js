@@ -37,25 +37,57 @@ const checkFileExists = (filePath, shouldExist, action) => {
 /**
  * Get service status on macOS
  * @param {string} name - Service name
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<string>} - Service status
  */
-export const getServiceStatus = async (name) => {
+export const getServiceStatus = async (name, system = true) => {
   try {
+    // Determine the correct domain to check based on system parameter
+    const domain = system ? 'system' : `gui/${os.userInfo().uid}`;
+
     try {
-      // Check if service exists first
-      const macStatus = execSync(`launchctl list | grep "${name}"`).toString();
-      if (!macStatus.trim()) {
-        return ServiceStatus.UNKNOWN;
+      let macStatus;
+
+      // First try modern approach with specific domain
+      try {
+        // For macOS 11+ we can check a specific domain
+        macStatus = execSync(`launchctl list ${domain}/${name} 2>/dev/null`).toString();
+        // If we get here, the service exists
+        // Check if it's running by looking for PID > 0
+        if (macStatus.includes('state = running') || macStatus.includes('"PID" = ')) {
+          return ServiceStatus.RUNNING;
+        } else {
+          return ServiceStatus.STOPPED;
+        }
+      } catch (modernError) {
+        // If the specific domain check fails, try the legacy approach
+        try {
+          // Legacy approach: grep the full list
+          // For user services, we should check the user domain
+          const grepCmd = system
+            ? `launchctl list | grep "${name}"`
+            : `launchctl list gui/${os.userInfo().uid} 2>/dev/null | grep "${name}"`;
+
+          macStatus = execSync(grepCmd).toString();
+
+          if (!macStatus.trim()) {
+            return ServiceStatus.UNKNOWN;
+          }
+
+          // Parse macOS service status
+          const [pid] = macStatus.split(/\s+/);
+          return pid && parseInt(pid) > 0 ? ServiceStatus.RUNNING : ServiceStatus.STOPPED;
+        } catch (legacyError) {
+          // If grep returns nothing (service doesn't exist), it will exit with code 1
+          if (legacyError.status === 1) {
+            return ServiceStatus.UNKNOWN;
+          }
+          throw legacyError;
+        }
       }
-      // Parse macOS service status
-      const [pid] = macStatus.split(/\s+/);
-      return pid && parseInt(pid) > 0 ? ServiceStatus.RUNNING : ServiceStatus.STOPPED;
     } catch (macError) {
-      // If grep returns nothing (service doesn't exist), it will exit with code 1
-      if (macError.status === 1) {
-        return ServiceStatus.UNKNOWN;
-      }
-      throw macError;
+      console.error(`Error checking service status: ${macError.message}`);
+      return ServiceStatus.UNKNOWN;
     }
   } catch (error) {
     console.error(`Error getting macOS service status: ${error.message}`);
@@ -66,11 +98,12 @@ export const getServiceStatus = async (name) => {
 /**
  * Check service health on macOS
  * @param {string} name - Service name
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<Object>} - Health information
  */
-export const checkServiceHealth = async (name) => {
+export const checkServiceHealth = async (name, system = true) => {
   try {
-    const status = await getServiceStatus(name);
+    const status = await getServiceStatus(name, system);
     return {
       healthy: status === ServiceStatus.RUNNING,
       status,
@@ -89,38 +122,67 @@ export const checkServiceHealth = async (name) => {
 /**
  * Inspect service configuration on macOS
  * @param {string} name - Service name
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<Object>} - Service configuration
  */
-export const inspectServiceConfig = async (name) => {
+export const inspectServiceConfig = async (name, system = true) => {
   try {
-    // Check both system and user locations
-    const systemPlistPath = `/Library/LaunchDaemons/${name}.plist`;
-    const userPlistPath = `${os.homedir()}/Library/LaunchAgents/${name}.plist`;
+    // Define plist path based on system parameter
+    const plistPath = system
+      ? `/Library/LaunchDaemons/${name}.plist`
+      : `${os.homedir()}/Library/LaunchAgents/${name}.plist`;
 
-    let configPath;
-    if (fs.existsSync(systemPlistPath)) {
-      configPath = systemPlistPath;
-    } else if (fs.existsSync(userPlistPath)) {
-      configPath = userPlistPath;
-    } else {
+    // Check if the plist file exists
+    if (!fs.existsSync(plistPath)) {
+      // If the specified location doesn't exist, try the alternative location
+      const altPlistPath = system
+        ? `${os.homedir()}/Library/LaunchAgents/${name}.plist`
+        : `/Library/LaunchDaemons/${name}.plist`;
+
+      if (fs.existsSync(altPlistPath)) {
+        console.log(`Service configuration not found at ${plistPath}, but found at ${altPlistPath}`);
+        return readServiceConfig(name, altPlistPath);
+      }
+
+      // Also check in /Library/LaunchAgents for system-wide but non-root services
+      if (system && fs.existsSync(`/Library/LaunchAgents/${name}.plist`)) {
+        console.log(`Service configuration found in /Library/LaunchAgents/${name}.plist`);
+        return readServiceConfig(name, `/Library/LaunchAgents/${name}.plist`);
+      }
+
       throw new Error(`Service configuration for "${name}" not found in standard locations.`);
     }
 
-    try {
-      const configContent = fs.readFileSync(configPath, 'utf8');
-      return {
-        name,
-        platform: 'darwin',
-        configType: 'macOS LaunchDaemon/LaunchAgent',
-        configPath,
-        configContent,
-        timestamp: new Date().toISOString()
-      };
-    } catch (error) {
-      throw new Error(`Error reading service configuration: ${error.message}`);
-    }
+    return readServiceConfig(name, plistPath);
   } catch (error) {
     throw error;
+  }
+};
+
+/**
+ * Helper function to read service configuration
+ * @private
+ * @param {string} name - Service name
+ * @param {string} configPath - Path to the configuration file
+ * @returns {Promise<Object>} - Service configuration
+ */
+const readServiceConfig = (name, configPath) => {
+  try {
+    const configContent = fs.readFileSync(configPath, 'utf8');
+    const configType = configPath.includes('LaunchDaemons')
+      ? 'macOS LaunchDaemon (System)'
+      : 'macOS LaunchAgent (User)';
+
+    return {
+      name,
+      platform: 'darwin',
+      configType,
+      configPath,
+      configContent,
+      timestamp: new Date().toISOString()
+    };
+  } catch (error) {
+    throw new Error(`Error reading service configuration: ${error.message}`);
   }
 };
 
@@ -167,25 +229,75 @@ export const manageService = async (register, { name, description, command, env 
       </plist>`;
 
       try {
-        fs.writeFileSync(plistPath, plistContent);
+        // Ensure the LaunchAgents directory exists for user-level services
+        if (!system) {
+          const userLaunchAgentsDir = `${os.homedir()}/Library/LaunchAgents`;
+          if (!fs.existsSync(userLaunchAgentsDir)) {
+            try {
+              fs.mkdirSync(userLaunchAgentsDir, { recursive: true });
+              console.log(`Created directory: ${userLaunchAgentsDir}`);
+            } catch (dirError) {
+              console.error(`Error creating LaunchAgents directory: ${dirError.message}`);
+              reject(new Error(`Failed to create LaunchAgents directory: ${dirError.message}`));
+              return;
+            }
+          }
+        }
+
+        try {
+          fs.writeFileSync(plistPath, plistContent);
+        } catch (writeError) {
+          if (writeError.code === 'EACCES') {
+            console.error(`Permission denied when writing to ${plistPath}`);
+            if (system) {
+              reject(new Error(`Permission denied. System-level services require root privileges. Try running with sudo.`));
+            } else {
+              reject(new Error(`Permission denied when writing to ${plistPath}. Check your user permissions.`));
+            }
+            return;
+          }
+          throw writeError;
+        }
 
         // Check if we need sudo for system-level services
         const needsSudo = plistPath.startsWith('/Library/');
-        const loadCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
 
-        exec(loadCmd, (err, stdout, stderr) => {
-          if (err) {
-            console.error(`macOS service error: ${stderr}`);
-            if (stderr.includes('Permission denied')) {
-              console.error('This operation requires root privileges. Try running with sudo.');
-            }
-            reject(err);
+        // Determine the domain based on system
+        const domain = system ? 'system' : `gui/${os.userInfo().uid}`;
+
+        // Try modern approach first (macOS 11+)
+        const bootstrapCmd = `${needsSudo ? 'sudo ' : ''}launchctl bootstrap ${domain} ${plistPath}`;
+
+        exec(bootstrapCmd, (bootstrapErr, bootstrapStdout, bootstrapStderr) => {
+          if (bootstrapErr) {
+            console.log(`Modern launchctl bootstrap failed, trying legacy load...`);
+
+            // Fall back to legacy approach
+            const loadCmd = `${needsSudo ? 'sudo ' : ''}launchctl load -w ${plistPath}`;
+
+            exec(loadCmd, (err, stdout, stderr) => {
+              if (err) {
+                console.error(`macOS service error: ${stderr}`);
+                if (stderr.includes('Permission denied')) {
+                  if (system) {
+                    console.error('This operation requires root privileges. Try running with sudo.');
+                  } else {
+                    console.error(`Permission denied when loading ${plistPath}. Check your user permissions.`);
+                  }
+                }
+                reject(err);
+              } else {
+                console.log(`Service "${name}" registered successfully on macOS (legacy method).`);
+                resolve(stdout);
+              }
+            });
           } else {
             console.log(`Service "${name}" registered successfully on macOS.`);
-            resolve(stdout);
+            resolve(bootstrapStdout);
           }
         });
       } catch (error) {
+        console.error(`Error registering service: ${error.message}`);
         reject(error);
       }
     } else {
@@ -195,18 +307,76 @@ export const manageService = async (register, { name, description, command, env 
 
       // Check if we need sudo for system-level services
       const needsSudo = plistPath.startsWith('/Library/');
-      const unloadCmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath} && ${needsSudo ? 'sudo ' : ''}rm ${plistPath}`;
 
-      exec(unloadCmd, (err, stdout, stderr) => {
-        if (err) {
-          console.error(`macOS service error: ${stderr}`);
-          if (stderr.includes('Permission denied')) {
-            console.error('This operation requires root privileges. Try running with sudo.');
-          }
-          reject(err);
+      // Determine the domain based on system
+      const domain = system ? 'system' : `gui/${os.userInfo().uid}`;
+
+      // Try modern approach first (macOS 11+)
+      const bootoutCmd = `${needsSudo ? 'sudo ' : ''}launchctl bootout ${domain} ${plistPath}`;
+
+      exec(bootoutCmd, (bootoutErr, bootoutStdout) => {
+        if (bootoutErr) {
+          console.log(`Modern launchctl bootout failed, trying legacy unload...`);
+
+          // Fall back to legacy approach
+          const unloadCmd = `${needsSudo ? 'sudo ' : ''}launchctl unload -w ${plistPath}`;
+
+          exec(unloadCmd, (unloadErr, unloadStdout, unloadStderr) => {
+            if (unloadErr) {
+              console.error(`macOS service unload error: ${unloadStderr}`);
+              if (unloadStderr.includes('Permission denied')) {
+                if (system) {
+                  console.error('This operation requires root privileges. Try running with sudo.');
+                } else {
+                  console.error(`Permission denied when unloading ${plistPath}. Check your user permissions.`);
+                }
+              }
+              reject(unloadErr);
+              return;
+            }
+
+            // Now try to remove the plist file
+            const rmCmd = `${needsSudo ? 'sudo ' : ''}rm ${plistPath}`;
+            exec(rmCmd, (rmErr, rmStdout, rmStderr) => {
+              if (rmErr) {
+                console.error(`Error removing plist file: ${rmStderr}`);
+                if (rmStderr.includes('Permission denied')) {
+                  if (system) {
+                    console.error('Removing the plist file requires root privileges. Try running with sudo.');
+                  } else {
+                    console.error(`Permission denied when removing ${plistPath}. Check your user permissions.`);
+                  }
+                }
+                // Don't reject here, as the service was unloaded successfully
+                console.log(`Service "${name}" unloaded successfully, but the plist file could not be removed.`);
+                resolve(unloadStdout);
+              } else {
+                console.log(`Service "${name}" unregistered successfully on macOS (legacy method).`);
+                resolve(rmStdout);
+              }
+            });
+          });
         } else {
-          console.log(`Service "${name}" unregistered successfully on macOS.`);
-          resolve(stdout);
+          // Now try to remove the plist file
+          const rmCmd = `${needsSudo ? 'sudo ' : ''}rm ${plistPath}`;
+          exec(rmCmd, (rmErr, rmStdout, rmStderr) => {
+            if (rmErr) {
+              console.error(`Error removing plist file: ${rmStderr}`);
+              if (rmStderr.includes('Permission denied')) {
+                if (system) {
+                  console.error('Removing the plist file requires root privileges. Try running with sudo.');
+                } else {
+                  console.error(`Permission denied when removing ${plistPath}. Check your user permissions.`);
+                }
+              }
+              // Don't reject here, as the service was unloaded successfully
+              console.log(`Service "${name}" unloaded successfully, but the plist file could not be removed.`);
+              resolve(bootoutStdout);
+            } else {
+              console.log(`Service "${name}" unregistered successfully on macOS.`);
+              resolve(rmStdout);
+            }
+          });
         }
       });
     }
@@ -240,7 +410,7 @@ export const startStopService = async (start, name, system = true) => {
       domain = 'system';
     } else {
       // For user-level services, use the current user's UID
-      domain = `gui/$(id -u)`;
+      domain = `gui/${os.userInfo().uid}`;
     }
 
     let cmd;
@@ -366,7 +536,7 @@ export const enableService = async (name, system = true) => {
       domain = 'system';
     } else {
       // For user-level services, use the current user's UID
-      domain = `gui/$(id -u)`;
+      domain = `gui/${os.userInfo().uid}`;
     }
 
     // Modern approach (macOS 11+): Use enable to enable the service

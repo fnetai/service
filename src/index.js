@@ -112,17 +112,17 @@ export default async (config) => {
 
     // Add status check action
     if (action === 'status') {
-      return await platformImpl.getServiceStatus(name);
+      return await platformImpl.getServiceStatus(name, system);
     }
 
     // Add health check action
     if (action === 'health') {
-      return await platformImpl.checkServiceHealth(name);
+      return await platformImpl.checkServiceHealth(name, system);
     }
 
     // Add inspect action to show service configuration
     if (action === 'inspect') {
-      return await platformImpl.inspectServiceConfig(name);
+      return await platformImpl.inspectServiceConfig(name, system);
     }
 
     // Evaluate action and execute respective function

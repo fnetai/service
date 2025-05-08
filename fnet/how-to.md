@@ -159,6 +159,9 @@ await manageService({
 - Configurable `RunAtLoad` (via `autoStart`) and `KeepAlive` (via `restartOnFailure`) options
 - Environment variables and working directory support
 - Service configuration inspection
+- Proper handling of user-level services with correct domain resolution
+- Automatic creation of `~/Library/LaunchAgents/` directory if it doesn't exist
+- Detailed error messages for permission issues
 
 ### Linux
 
@@ -179,6 +182,33 @@ The library implements comprehensive error handling:
 - Health check capabilities
 
 When errors occur, the library throws an Error with a descriptive message. For status and health checks, error information is included in the returned object.
+
+## System vs. User-Level Services
+
+The `system` parameter determines whether a service is registered as system-wide or user-level:
+
+### System-Wide Services (`system: true`, default)
+
+- **Windows**: Registered as a Windows Service accessible to all users
+- **macOS**: Installed in `/Library/LaunchDaemons/` and runs as root or specified user
+- **Linux**: Installed in `/etc/systemd/system/` and runs as root or specified user
+- **Permissions**: Typically requires administrator/root privileges to register, start, or stop
+- **Use Case**: Services that need to run regardless of which user is logged in
+
+### User-Level Services (`system: false`)
+
+- **Windows**: Registered as a Windows Service but with user-specific settings
+- **macOS**: Installed in `~/Library/LaunchAgents/` and runs as the current user
+- **Linux**: Installed in `~/.config/systemd/user/` and runs as the current user
+- **Permissions**: Can be managed without administrator/root privileges
+- **Use Case**: Services that should only run when a specific user is logged in
+
+### Choosing Between System and User-Level
+
+- Use system-wide services for background processes that should always be running
+- Use user-level services for processes that are only needed when a specific user is logged in
+- Consider security implications - system-wide services may have more privileges
+- User-level services are easier to manage without administrator rights
 
 ## Best Practices
 
