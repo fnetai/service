@@ -37,12 +37,15 @@ const checkFileExists = (filePath, shouldExist, action) => {
 /**
  * Get service status on Linux
  * @param {string} name - Service name
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<string>} - Service status
  */
-export const getServiceStatus = async (name) => {
+export const getServiceStatus = async (name, system = true) => {
   try {
     try {
-      const linuxStatus = execSync(`systemctl is-active "${name}"`).toString().trim();
+      // For user-level services, use --user flag
+      const userFlag = !system ? ' --user' : '';
+      const linuxStatus = execSync(`systemctl${userFlag} is-active "${name}"`).toString().trim();
       switch (linuxStatus) {
         case 'active': return ServiceStatus.RUNNING;
         case 'failed': return ServiceStatus.FAILED;
@@ -64,14 +67,17 @@ export const getServiceStatus = async (name) => {
 /**
  * Check service health on Linux
  * @param {string} name - Service name
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<Object>} - Health information
  */
-export const checkServiceHealth = async (name) => {
+export const checkServiceHealth = async (name, system = true) => {
   try {
-    const status = await getServiceStatus(name);
+    const status = await getServiceStatus(name, system);
     if (status === ServiceStatus.FAILED) {
       // Get service logs for diagnostics
-      const logs = execSync(`journalctl -u "${name}" --no-pager -n 50`).toString();
+      // For user-level services, use --user flag
+      const userFlag = !system ? ' --user' : '';
+      const logs = execSync(`journalctl${userFlag} -u "${name}" --no-pager -n 50`).toString();
 
       return {
         healthy: false,
@@ -99,21 +105,31 @@ export const checkServiceHealth = async (name) => {
 /**
  * Inspect service configuration on Linux
  * @param {string} name - Service name
+ * @param {boolean} system - Whether the service is system-wide
  * @returns {Promise<Object>} - Service configuration
  */
-export const inspectServiceConfig = async (name) => {
+export const inspectServiceConfig = async (name, system = true) => {
   try {
-    // Check both system and user locations
-    const systemServicePath = `/etc/systemd/system/${name}.service`;
-    const userServicePath = `${os.homedir()}/.config/systemd/user/${name}.service`;
-
+    // Determine service path based on system parameter
     let configPath;
-    if (fs.existsSync(systemServicePath)) {
-      configPath = systemServicePath;
-    } else if (fs.existsSync(userServicePath)) {
-      configPath = userServicePath;
+    if (system) {
+      configPath = `/etc/systemd/system/${name}.service`;
     } else {
-      throw new Error(`Service configuration for "${name}" not found in standard locations.`);
+      configPath = `${os.homedir()}/.config/systemd/user/${name}.service`;
+    }
+
+    // If not found in expected location, check the other location as fallback
+    if (!fs.existsSync(configPath)) {
+      const fallbackPath = system
+        ? `${os.homedir()}/.config/systemd/user/${name}.service`
+        : `/etc/systemd/system/${name}.service`;
+
+      if (fs.existsSync(fallbackPath)) {
+        configPath = fallbackPath;
+        console.warn(`Service found in ${system ? 'user' : 'system'} location instead of expected ${system ? 'system' : 'user'} location.`);
+      } else {
+        throw new Error(`Service configuration for "${name}" not found in standard locations.`);
+      }
     }
 
     try {
@@ -124,6 +140,7 @@ export const inspectServiceConfig = async (name) => {
         configType: 'Linux Systemd Service',
         configPath,
         configContent,
+        serviceLevel: configPath.startsWith('/etc/') ? 'system' : 'user',
         timestamp: new Date().toISOString()
       };
     } catch (error) {
@@ -160,8 +177,9 @@ export const manageService = async (register, { name, description, command, env 
 
   return new Promise((resolve, reject) => {
     if (register) {
-      if (!checkFileExists(servicePath, false, "register")) {
-        return reject(new Error(`${servicePath} already exists`));
+      // Check if file exists and warn, but allow overwrite
+      if (fs.existsSync(servicePath)) {
+        console.warn(`Warning: ${servicePath} already exists. Overwriting...`);
       }
 
       // Escape special characters in command arguments
@@ -188,19 +206,27 @@ export const manageService = async (register, { name, description, command, env 
         // Check if we need sudo for system-level services
         const needsSudo = servicePath.startsWith('/etc/');
 
+        // For user-level services, use --user flag
+        const userFlag = !system ? ' --user' : '';
+
         // Build the command based on autoStart parameter
-        let enableCmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name}`;
+        let enableCmd = `${needsSudo ? 'sudo ' : ''}systemctl${userFlag} enable ${name}`;
 
         // Only start the service if autoStart is true
         if (autoStart) {
-          enableCmd += ` && ${needsSudo ? 'sudo ' : ''}systemctl start ${name}`;
+          enableCmd += ` && ${needsSudo ? 'sudo ' : ''}systemctl${userFlag} start ${name}`;
         }
 
         exec(enableCmd, (err, stdout, stderr) => {
           if (err) {
             console.error(`Linux service error: ${stderr}`);
-            if (stderr.includes('Permission denied')) {
-              console.error('This operation requires root privileges. Try running with sudo.');
+            if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
+              if (system) {
+                console.error('This operation requires root privileges. Try running with sudo.');
+              } else {
+                console.error('User-level service registration failed. Make sure systemd user services are enabled.');
+                console.error('You may need to run: systemctl --user daemon-reload');
+              }
             }
             reject(err);
           } else {
@@ -218,7 +244,11 @@ export const manageService = async (register, { name, description, command, env 
 
       // Check if we need sudo for system-level services
       const needsSudo = servicePath.startsWith('/etc/');
-      const disableCmd = `${needsSudo ? 'sudo ' : ''}systemctl stop ${name} && ${needsSudo ? 'sudo ' : ''}systemctl disable ${name} && ${needsSudo ? 'sudo ' : ''}rm ${servicePath}`;
+
+      // For user-level services, use --user flag
+      const userFlag = !system ? ' --user' : '';
+
+      const disableCmd = `${needsSudo ? 'sudo ' : ''}systemctl${userFlag} stop ${name} && ${needsSudo ? 'sudo ' : ''}systemctl${userFlag} disable ${name} && ${needsSudo ? 'sudo ' : ''}rm ${servicePath}`;
 
       exec(disableCmd, (err, stdout, stderr) => {
         if (err) {
@@ -247,7 +277,11 @@ export const startStopService = async (start, name, system = true) => {
   return new Promise((resolve, reject) => {
     // Check if we need sudo for system-level services
     const needsSudo = system;
-    const cmd = `${needsSudo ? 'sudo ' : ''}systemctl ${start ? 'start' : 'stop'} ${name}`;
+
+    // For user-level services, use --user flag
+    const userFlag = !system ? ' --user' : '';
+
+    const cmd = `${needsSudo ? 'sudo ' : ''}systemctl${userFlag} ${start ? 'start' : 'stop'} ${name}`;
 
     exec(cmd, (err, stdout, stderr) => {
       if (err) {
@@ -283,13 +317,21 @@ export const enableService = async (name, system = true) => {
 
     // Check if we need sudo for system-level services
     const needsSudo = servicePath.startsWith('/etc/');
-    const cmd = `${needsSudo ? 'sudo ' : ''}systemctl enable ${name}`;
+
+    // For user-level services, use --user flag
+    const userFlag = !system ? ' --user' : '';
+
+    const cmd = `${needsSudo ? 'sudo ' : ''}systemctl${userFlag} enable ${name}`;
 
     exec(cmd, (err, stdout, stderr) => {
       if (err) {
         console.error(`Linux service enable error: ${stderr}`);
-        if (stderr.includes('Permission denied')) {
-          console.error('This operation requires root privileges. Try running with sudo.');
+        if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
+          if (system) {
+            console.error('This operation requires root privileges. Try running with sudo.');
+          } else {
+            console.error('User-level service enable failed. Make sure systemd user services are enabled.');
+          }
         }
         reject(err);
       } else {
