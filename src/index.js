@@ -14,6 +14,9 @@ export const ServiceStatus = {
   UNKNOWN: 'unknown'
 };
 
+// Valid actions
+const VALID_ACTIONS = ['register', 'unregister', 'start', 'stop', 'enable', 'status', 'health', 'inspect'];
+
 /**
  * @typedef {Object} Input
  * @property {'register' | 'unregister' | 'start' | 'stop' | 'enable' | 'status' | 'health' | 'inspect'} action - The operation to perform on the service
@@ -28,32 +31,29 @@ export const ServiceStatus = {
  * @property {boolean} [restartOnFailure=true] - Whether to restart the service automatically if it fails or stops
  */
 
-/**
- * @typedef {Object} Output
- * @property {boolean} healthy - Whether the service is healthy
- * @property {string} status - Service status (running, stopped, failed, unknown)
- * @property {string} [error] - Error message if any
- * @property {string} timestamp - ISO timestamp of when the check was performed
- */
+const validateConfig = (config) => {
+  if (!config || typeof config !== 'object') {
+    throw new Error('Configuration object is required');
+  }
 
-// Add proper error handling and validation
-const validateConfig = ({ action, name, description, command, user, env, wdir, autoStart, restartOnFailure, system }) => {
+  const { action, name, description, command, user, env, wdir, autoStart, restartOnFailure, system } = config;
   const errors = [];
 
+  // Validate action
+  if (!action || !VALID_ACTIONS.includes(action)) {
+    errors.push(`Invalid action '${action}'. Must be one of: ${VALID_ACTIONS.join(', ')}`);
+  }
+
   if (!name?.trim()) errors.push('Service name is required');
+
   if (action === 'register') {
     if (!description?.trim()) errors.push('Service description is required');
     if (!Array.isArray(command) || command.length === 0) errors.push('Command array is required');
     if (wdir && !fs.existsSync(wdir)) errors.push('Working directory does not exist');
-    // Validate environment variables if provided
-    if (env && typeof env !== 'object') errors.push('Environment variables must be an object');
-    // Validate user if provided
+    if (env && (typeof env !== 'object' || Array.isArray(env))) errors.push('Environment variables must be a plain object');
     if (user && typeof user !== 'string') errors.push('User must be a string');
-    // Validate autoStart if provided
     if (autoStart !== undefined && typeof autoStart !== 'boolean') errors.push('autoStart must be a boolean');
-    // Validate restartOnFailure if provided
     if (restartOnFailure !== undefined && typeof restartOnFailure !== 'boolean') errors.push('restartOnFailure must be a boolean');
-    // Validate system if provided
     if (system !== undefined && typeof system !== 'boolean') errors.push('system must be a boolean');
   }
 
@@ -65,11 +65,8 @@ const validateConfig = ({ action, name, description, command, user, env, wdir, a
 /**
  * Manages system services across Windows, macOS, and Linux platforms
  * @param {Input} config - Service configuration object
- * @returns {Promise<Output|void>} Returns status information for 'status', 'health', and 'inspect' actions
+ * @returns {Promise<string|Object|void>} Returns status string, health/inspect object, or void
  * @throws {Error} Throws if configuration validation fails or operation errors occur
- *
- * Note: On macOS, 'start' and 'stop' actions use different commands
- * depending on the macOS version (modern vs. legacy)
  */
 export default async (config) => {
   try {
@@ -91,74 +88,43 @@ export default async (config) => {
     const platform = os.platform();
 
     // Dynamically import the platform-specific implementation
+    // Note: Each import path must be a static string literal for bundler compatibility
     let platformImpl;
-    try {
-      switch (platform) {
-        case 'win32':
-          platformImpl = await import('./windows.js');
-          break;
-        case 'darwin':
-          platformImpl = await import('./macos.js');
-          break;
-        case 'linux':
-          platformImpl = await import('./linux.js');
-          break;
-        default:
-          throw new Error(`Unsupported platform: ${platform}`);
-      }
-    } catch (error) {
-      throw new Error(`Failed to load platform-specific implementation: ${error.message}`);
+    switch (platform) {
+      case 'win32':  platformImpl = await import('./windows.js'); break;
+      case 'darwin': platformImpl = await import('./macos.js');   break;
+      case 'linux':  platformImpl = await import('./linux.js');   break;
+      default: throw new Error(`Unsupported platform: ${platform}`);
     }
 
-    // Add status check action
-    if (action === 'status') {
-      return await platformImpl.getServiceStatus(name, system);
-    }
+    // Dispatch action to platform-specific implementation
+    switch (action) {
+      case 'status':
+        return await platformImpl.getServiceStatus(name, system);
 
-    // Add health check action
-    if (action === 'health') {
-      return await platformImpl.checkServiceHealth(name, system);
-    }
+      case 'health':
+        return await platformImpl.checkServiceHealth(name, system);
 
-    // Add inspect action to show service configuration
-    if (action === 'inspect') {
-      return await platformImpl.inspectServiceConfig(name, system);
-    }
+      case 'inspect':
+        return await platformImpl.inspectServiceConfig(name, system);
 
-    // Evaluate action and execute respective function
-    if (action === 'register') {
-      return await platformImpl.manageService(true, {
-        name,
-        description,
-        command,
-        env,
-        wdir,
-        user,
-        system,
-        autoStart,
-        restartOnFailure
-      });
-    } else if (action === 'unregister') {
-      return await platformImpl.manageService(false, {
-        name,
-        description,
-        command,
-        env,
-        wdir,
-        user,
-        system
-      });
-    } else if (action === 'start') {
-      return await platformImpl.startStopService(true, name, system);
-    } else if (action === 'stop') {
-      return await platformImpl.startStopService(false, name, system);
-    } else if (action === 'enable') {
-      return await platformImpl.enableService(name, system);
-    } else if (action === 'status' || action === 'health' || action === 'inspect') {
-      // These actions are already handled above
-      // This is just to prevent the error message below
-    } else {
-      throw new Error("Invalid action. Use 'register', 'unregister', 'start', 'stop', 'enable', 'status', 'health', or 'inspect'.");
+      case 'register':
+        return await platformImpl.manageService(true, {
+          name, description, command, env, wdir, user,
+          system, autoStart, restartOnFailure
+        });
+
+      case 'unregister':
+        return await platformImpl.manageService(false, { name, system });
+
+      case 'start':
+        return await platformImpl.startStopService(true, name, system);
+
+      case 'stop':
+        return await platformImpl.startStopService(false, name, system);
+
+      case 'enable':
+        return await platformImpl.enableService(name, system);
     }
   } catch (error) {
     console.error(`Service management error: ${error.message}`);
