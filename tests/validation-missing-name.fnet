@@ -1,0 +1,5 @@
+action: register
+description: Should fail - no name provided
+command:
+  - /usr/bin/echo
+  - hello

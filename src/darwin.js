@@ -42,52 +42,33 @@ const checkFileExists = (filePath, shouldExist, action) => {
  */
 export const getServiceStatus = async (name, system = true) => {
   try {
-    // Determine the correct domain to check based on system parameter
-    const domain = system ? 'system' : `gui/${os.userInfo().uid}`;
+    const sudo = system ? 'sudo ' : '';
 
     try {
-      let macStatus;
+      // Try direct service lookup first
+      const macStatus = execSync(`${sudo}launchctl list "${name}" 2>/dev/null`).toString();
 
-      // First try modern approach with specific domain
-      try {
-        // For macOS 11+ we can check a specific domain
-        macStatus = execSync(`launchctl list ${domain}/${name} 2>/dev/null`).toString();
-        // If we get here, the service exists
-        // Check if it's running by looking for PID > 0
-        if (macStatus.includes('state = running') || macStatus.includes('"PID" = ')) {
-          return ServiceStatus.RUNNING;
-        } else {
-          return ServiceStatus.STOPPED;
-        }
-      } catch (modernError) {
-        // If the specific domain check fails, try the legacy approach
-        try {
-          // Legacy approach: grep the full list
-          // For user services, we should check the user domain
-          const grepCmd = system
-            ? `launchctl list | grep "${name}"`
-            : `launchctl list gui/${os.userInfo().uid} 2>/dev/null | grep "${name}"`;
-
-          macStatus = execSync(grepCmd).toString();
-
-          if (!macStatus.trim()) {
-            return ServiceStatus.UNKNOWN;
-          }
-
-          // Parse macOS service status
-          const [pid] = macStatus.split(/\s+/);
-          return pid && parseInt(pid) > 0 ? ServiceStatus.RUNNING : ServiceStatus.STOPPED;
-        } catch (legacyError) {
-          // If grep returns nothing (service doesn't exist), it will exit with code 1
-          if (legacyError.status === 1) {
-            return ServiceStatus.UNKNOWN;
-          }
-          throw legacyError;
-        }
+      // If we get here, the service exists
+      // Check if it has a PID (running)
+      if (macStatus.includes('"PID" = ')) {
+        return ServiceStatus.RUNNING;
       }
-    } catch (macError) {
-      console.error(`Error checking service status: ${macError.message}`);
-      return ServiceStatus.UNKNOWN;
+      return ServiceStatus.STOPPED;
+    } catch (directError) {
+      // Direct lookup failed, try grep approach
+      try {
+        const grepResult = execSync(`${sudo}launchctl list | grep "${name}"`).toString().trim();
+
+        if (!grepResult) {
+          return ServiceStatus.UNKNOWN;
+        }
+
+        // Parse: PID  Status  Label
+        const [pid] = grepResult.split(/\s+/);
+        return pid && pid !== '-' && parseInt(pid) > 0 ? ServiceStatus.RUNNING : ServiceStatus.STOPPED;
+      } catch (grepError) {
+        return ServiceStatus.UNKNOWN;
+      }
     }
   } catch (error) {
     console.error(`Error getting macOS service status: ${error.message}`);
@@ -104,11 +85,21 @@ export const getServiceStatus = async (name, system = true) => {
 export const checkServiceHealth = async (name, system = true) => {
   try {
     const status = await getServiceStatus(name, system);
-    return {
+    const result = {
       healthy: status === ServiceStatus.RUNNING,
       status,
       timestamp: new Date().toISOString()
     };
+
+    // If not healthy, attach recent logs for diagnostics
+    if (!result.healthy) {
+      try {
+        const logs = await getServiceLogs(name, 20);
+        result.logs = logs;
+      } catch (_) { /* ignore log errors */ }
+    }
+
+    return result;
   } catch (error) {
     return {
       healthy: false,
@@ -116,6 +107,53 @@ export const checkServiceHealth = async (name, system = true) => {
       error: error.message,
       timestamp: new Date().toISOString()
     };
+  }
+};
+
+/**
+ * Get service logs on macOS
+ * @param {string} name - Service name
+ * @param {number} lines - Number of log lines to return
+ * @returns {Promise<string>} - Service logs
+ */
+export const getServiceLogs = async (name, lines = 50) => {
+  try {
+    // macOS uses unified logging system (log show)
+    const logs = execSync(
+      `log show --predicate 'senderImagePath CONTAINS "${name}" OR subsystem == "${name}"' --last 1h --style compact 2>/dev/null | tail -${lines}`
+    ).toString().trim();
+
+    if (logs) return logs;
+
+    // Fallback: check stderr/stdout log files if configured in plist
+    const plistPaths = [
+      `/Library/LaunchDaemons/${name}.plist`,
+      `${os.homedir()}/Library/LaunchAgents/${name}.plist`
+    ];
+
+    for (const plistPath of plistPaths) {
+      if (fs.existsSync(plistPath)) {
+        const plistContent = fs.readFileSync(plistPath, 'utf8');
+
+        // Extract StandardErrorPath or StandardOutPath
+        const stderrMatch = plistContent.match(/<key>StandardErrorPath<\/key>\s*<string>([^<]+)<\/string>/);
+        const stdoutMatch = plistContent.match(/<key>StandardOutPath<\/key>\s*<string>([^<]+)<\/string>/);
+
+        const logParts = [];
+        if (stderrMatch && fs.existsSync(stderrMatch[1])) {
+          logParts.push(`--- stderr ---\n${execSync(`tail -${lines} "${stderrMatch[1]}"`).toString()}`);
+        }
+        if (stdoutMatch && fs.existsSync(stdoutMatch[1])) {
+          logParts.push(`--- stdout ---\n${execSync(`tail -${lines} "${stdoutMatch[1]}"`).toString()}`);
+        }
+
+        if (logParts.length > 0) return logParts.join('\n');
+      }
+    }
+
+    return 'No logs found.';
+  } catch (error) {
+    return `Error retrieving logs: ${error.message}`;
   }
 };
 

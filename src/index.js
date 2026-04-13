@@ -15,7 +15,7 @@ export const ServiceStatus = {
 };
 
 // Valid actions
-const VALID_ACTIONS = ['register', 'unregister', 'start', 'stop', 'enable', 'status', 'health', 'inspect'];
+const VALID_ACTIONS = ['register', 'unregister', 'start', 'stop', 'enable', 'status', 'health', 'inspect', 'logs'];
 
 /**
  * @typedef {Object} Input
@@ -91,9 +91,9 @@ export default async (config) => {
     // Note: Each import path must be a static string literal for bundler compatibility
     let platformImpl;
     switch (platform) {
-      case 'win32':  platformImpl = await import('./windows.js'); break;
-      case 'darwin': platformImpl = await import('./macos.js');   break;
-      case 'linux':  platformImpl = await import('./linux.js');   break;
+      case 'win32':  platformImpl = await import('./win32.js');  break;
+      case 'darwin': platformImpl = await import('./darwin.js'); break;
+      case 'linux':  platformImpl = await import('./linux.js');  break;
       default: throw new Error(`Unsupported platform: ${platform}`);
     }
 
@@ -107,6 +107,9 @@ export default async (config) => {
 
       case 'inspect':
         return await platformImpl.inspectServiceConfig(name, system);
+
+      case 'logs':
+        return await platformImpl.getServiceLogs(name);
 
       case 'register':
         return await platformImpl.manageService(true, {

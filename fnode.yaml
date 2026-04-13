@@ -2,7 +2,7 @@ name: service
 
 ai::name: "@fnet/service"
 
-s::repo.url: https://gitlab.com/fnetai/service.git
+s::repo.url: https://github.com/fnetai/service.git
 
 # input: g::file://./fnet/input.yaml
 
@@ -10,81 +10,102 @@ features:
   dts: false
   cli: false
   app: false
+  t::dev::cli: true
   s::runtime.type: bun
-      
+
 commands:
-  register:
-    usage: sudo -S frun register
-    steps:
-      - fnode cli:dev \
-          --action="{{action}}" \
-          --name="{{name}}" \
-          --user="{{user}}" \
-          --description="{{description}}" \
-          --command="/Users/gboyraz/Desktop/flownet/fnet/service/.tests/node-1/.workspace/.bin/node-1" \
-          --command="--cli-mode" \
-          --command="http" \
-          --command="--cli-port" \
-          --command="3000"
-          
-    context:
-      action: register
-      name: ai.flownet.node-1-service
-      description: Some sample flow node service for testing
-      user: gboyraz
 
-  unregister:
-    usage: sudo -S frun unregister
-    steps:
-      - fnode cli:dev --action "{{action}}" --name "{{name}}"
-    context:
-      action: unregister
-      name: ai.flownet.node-1-service
+  # --- Test Commands ---
 
-  enable:
-    usage: sudo -S frun enable
+  prepare-simple-server:
+    wdir: tests/simple-server
     steps:
-      - fnode cli:dev --action "{{action}}" --name "{{name}}"
-    context:
-      action: enable
-      name: ai.flownet.node-1-service
+      - fnode build
+      - fnode cli:compile
+      - fork: ./.workspace/.bin/simple-server --cli-mode http --cli-port 3000
+      - sleep: 3
+      - "curl http://localhost:3000/input -X POST -H \"Content-Type: application/json\" -d '{\"message\": \"Hello, World!\"}' -o /dev/stdout"
+      - exit: 0
 
-  status:
-    usage: sudo -S frun status
+  test-validation:
+    description: Test input validation (missing name, invalid action)
+    usage: frun test-validation
     steps:
-      - fnode cli:dev --action "{{action}}" --name "{{name}}"
-    context:
-      action: status
-      name: ai.flownet.node-1-service
+      - fnode cli:dev --config validation-missing-name
+      - fnode cli:dev --config validation-invalid-action
 
-  start:
-    usage: sudo -S frun start
+  test-register:
+    description: Register a test service (autoStart off)
+    usage: sudo -S frun test-register
     steps:
-      - fnode cli:dev --action "{{action}}" --name "{{name}}"
-    context:
-      action: start
-      name: ai.flownet.node-1-service
+      - fnode cli:dev --config register
 
-  stop:
-    usage: sudo -S frun stop
+  test-register-autostart:
+    description: Register a test service (autoStart on)
+    usage: sudo -S frun test-register-autostart
     steps:
-      - fnode cli:dev --action "{{action}}" --name "{{name}}"
-    context:
-      action: stop
-      name: ai.flownet.node-1-service
+      - fnode cli:dev --config register-autostart
 
-  health:
-    usage: sudo -S frun health
+  test-status:
+    description: Check test service status
+    usage: frun test-status
     steps:
-      - fnode cli:dev --action "{{action}}" --name "{{name}}"
-    context:
-      action: health
-      name: ai.flownet.node-1-service
+      - fnode cli:dev --config status
 
-  inspect:
-    usage: sudo -S frun inspect
+  test-start:
+    description: Start the test service
+    usage: sudo -S frun test-start
     steps:
-      - fnode cli:dev --action "{{action}}" --name "{{name}}"
-    context:
-      action: inspect
-      name: ai.flownet.node-1-service
+      - fnode cli:dev --config start
+
+  test-stop:
+    description: Stop the test service
+    usage: sudo -S frun test-stop
+    steps:
+      - fnode cli:dev --config stop
+
+  test-health:
+    description: Check test service health
+    usage: frun test-health
+    steps:
+      - fnode cli:dev --config health
+
+  test-inspect:
+    description: Inspect test service configuration
+    usage: frun test-inspect
+    steps:
+      - fnode cli:dev --config inspect
+
+  test-logs:
+    description: Get test service logs
+    usage: frun test-logs
+    steps:
+      - fnode cli:dev --config logs
+
+  test-unregister:
+    description: Unregister the test service
+    usage: sudo -S frun test-unregister
+    steps:
+      - fnode cli:dev --config unregister
+
+  test-all:
+    description: Run full test lifecycle
+    usage: sudo -S frun test-all
+    steps:
+      # Manual start lifecycle
+      - frun test-status
+      - frun test-register
+      - frun test-status
+      - frun test-start
+      - frun test-health
+      - frun test-inspect
+      - frun test-logs
+      - frun test-stop
+      - frun test-status
+      - frun test-unregister
+      # AutoStart lifecycle
+      - frun test-register-autostart
+      - frun test-status
+      - frun test-health
+      - frun test-stop
+      - frun test-unregister

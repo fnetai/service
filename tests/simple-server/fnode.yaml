@@ -1,0 +1,8 @@
+name: simple-server
+
+
+features:
+  s::runtime.type: bun
+  s::cli.http:
+    enabled: true
+    path: input

@@ -1,0 +1,12 @@
+action: register
+name: fnet.test.simple-server
+description: Simple HTTP server for service management testing
+user: gboyraz
+command:
+  - /Users/gboyraz/Desktop/flownet/fnet/service/tests/simple-server/.workspace/.bin/simple-server
+  - --cli-mode
+  - http
+  - --cli-port
+  - "4000"
+autoStart: false
+restartOnFailure: true

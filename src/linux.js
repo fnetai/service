@@ -109,6 +109,22 @@ export const checkServiceHealth = async (name, system = true) => {
 };
 
 /**
+ * Get service logs on Linux
+ * @param {string} name - Service name
+ * @param {number} lines - Number of log lines to return
+ * @returns {Promise<string>} - Service logs
+ */
+export const getServiceLogs = async (name, lines = 50) => {
+  try {
+    const userFlag = !name.startsWith('/etc/') ? ' --user' : '';
+    const logs = execSync(`journalctl${userFlag} -u "${name}" --no-pager -n ${lines} 2>/dev/null`).toString().trim();
+    return logs || 'No logs found.';
+  } catch (error) {
+    return `Error retrieving logs: ${error.message}`;
+  }
+};
+
+/**
  * Inspect service configuration on Linux
  * @param {string} name - Service name
  * @param {boolean} system - Whether the service is system-wide
