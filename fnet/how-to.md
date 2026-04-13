@@ -170,6 +170,9 @@ await manageService({
 - Configurable automatic startup with `autoStart` parameter
 - Configurable restart behavior with `restartOnFailure` parameter
 - Detailed status, health monitoring, and configuration inspection with journalctl integration
+- User-level services use `systemctl --user` commands
+- Automatic handling of D-Bus session bus issues in SSH sessions
+- Helpful error messages for lingering and session setup
 
 ## Error Handling
 
@@ -202,6 +205,41 @@ The `system` parameter determines whether a service is registered as system-wide
 - **Linux**: Installed in `~/.config/systemd/user/` and runs as the current user
 - **Permissions**: Can be managed without administrator/root privileges
 - **Use Case**: Services that should only run when a specific user is logged in
+
+#### Linux User-Level Services - Special Considerations
+
+User-level systemd services on Linux require a D-Bus session bus connection. In SSH sessions, this may not be available by default. If you encounter errors like:
+
+```text
+Failed to connect to bus: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined
+```
+
+You have two options:
+
+##### Option 1: Enable Lingering (Recommended for persistent services)
+
+Lingering allows user services to run even when the user is not logged in:
+
+```bash
+# Enable lingering for your user
+sudo loginctl enable-linger $USER
+
+# Set up environment (if needed)
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+
+# Reload systemd user daemon
+systemctl --user daemon-reload
+
+# Enable and start your service
+systemctl --user enable your-service-name
+systemctl --user start your-service-name
+```
+
+##### Option 2: Use System-Level Service
+
+If you need the service to run system-wide, register it with `system: true` instead (requires sudo).
+
+The library will automatically detect D-Bus connection issues and provide helpful guidance in error messages.
 
 ### Choosing Between System and User-Level
 

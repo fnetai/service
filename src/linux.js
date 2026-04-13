@@ -52,6 +52,12 @@ export const getServiceStatus = async (name, system = true) => {
         default: return ServiceStatus.STOPPED;
       }
     } catch (linuxError) {
+      // D-Bus connection issues for user-level services
+      if (linuxError.message && (linuxError.message.includes('DBUS_SESSION_BUS_ADDRESS') ||
+          linuxError.message.includes('Failed to connect to bus'))) {
+        console.error('Cannot check user-level service status: D-Bus session bus not available.');
+        return ServiceStatus.UNKNOWN;
+      }
       // If service doesn't exist, systemctl will exit with non-zero code
       if (linuxError.status !== 0) {
         return ServiceStatus.UNKNOWN;
@@ -185,20 +191,36 @@ export const manageService = async (register, { name, description, command, env 
       // Escape special characters in command arguments
       const escapedCommand = command.map(arg => arg.replace(/(["\s'$`\\])/g, '\\$1')).join(' ');
 
-      const serviceContent = `
-      [Unit]
-      Description=${description}
-      After=network.target
+      // Build service file lines dynamically to avoid empty lines
+      const serviceLines = [
+        '[Unit]',
+        `Description=${description}`,
+        'After=network.target',
+        '',
+        '[Service]',
+        `ExecStart=${escapedCommand}`,
+        `Restart=${restartOnFailure ? 'always' : 'no'}`,
+      ];
 
-      [Service]
-      ExecStart=${escapedCommand}
-      Restart=${restartOnFailure ? 'always' : 'no'}
-      ${user ? `User=${user}` : `User=${process.env.USER}`}
-      ${wdir ? `WorkingDirectory=${path.resolve(wdir)}` : ''}
-      ${formattedEnv ? `Environment="${formattedEnv}"` : ''}
+      // User directive is only relevant for system-level services
+      if (system) {
+        serviceLines.push(`User=${user || process.env.USER}`);
+      }
 
-      [Install]
-      WantedBy=multi-user.target`;
+      if (wdir) {
+        serviceLines.push(`WorkingDirectory=${path.resolve(wdir)}`);
+      }
+
+      if (formattedEnv) {
+        serviceLines.push(`Environment="${formattedEnv}"`);
+      }
+
+      serviceLines.push('');
+      serviceLines.push('[Install]');
+      // User-level services use default.target, system services use multi-user.target
+      serviceLines.push(`WantedBy=${system ? 'multi-user.target' : 'default.target'}`);
+
+      const serviceContent = serviceLines.join('\n');
 
       try {
         fs.writeFileSync(servicePath, serviceContent);
@@ -208,6 +230,40 @@ export const manageService = async (register, { name, description, command, env 
 
         // For user-level services, use --user flag
         const userFlag = !system ? ' --user' : '';
+
+        // For user-level services, first try to reload daemon
+        if (!system) {
+          try {
+            execSync('systemctl --user daemon-reload 2>&1');
+          } catch (reloadErr) {
+            // If daemon-reload fails due to D-Bus issues, provide helpful message
+            if (reloadErr.message.includes('DBUS_SESSION_BUS_ADDRESS') ||
+                reloadErr.message.includes('XDG_RUNTIME_DIR') ||
+                reloadErr.message.includes('Failed to connect to bus')) {
+              console.warn('Warning: Cannot connect to user systemd session (D-Bus not available).');
+              console.warn('This is common in SSH sessions without a login session.');
+              console.warn('');
+              console.warn('Service file created at:', servicePath);
+              console.warn('');
+              console.warn('To enable this service, you have two options:');
+              console.warn('');
+              console.warn('Option 1 - Enable lingering (recommended for services):');
+              console.warn('  sudo loginctl enable-linger $USER');
+              console.warn('  Then logout and login again, or run:');
+              console.warn('  export XDG_RUNTIME_DIR=/run/user/$(id -u)');
+              console.warn('  systemctl --user daemon-reload');
+              console.warn('  systemctl --user enable ' + name);
+              console.warn('  systemctl --user start ' + name);
+              console.warn('');
+              console.warn('Option 2 - Use system-level service instead:');
+              console.warn('  Register with system=true parameter');
+              console.warn('');
+
+              return resolve('Service file created, but manual activation required (see warnings above)');
+            }
+            // Other errors, continue to try enable
+          }
+        }
 
         // Build the command based on autoStart parameter
         let enableCmd = `${needsSudo ? 'sudo ' : ''}systemctl${userFlag} enable ${name}`;
@@ -220,12 +276,30 @@ export const manageService = async (register, { name, description, command, env 
         exec(enableCmd, (err, stdout, stderr) => {
           if (err) {
             console.error(`Linux service error: ${stderr}`);
-            if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
+
+            // Check for D-Bus connection issues
+            if (stderr.includes('DBUS_SESSION_BUS_ADDRESS') ||
+                stderr.includes('XDG_RUNTIME_DIR') ||
+                stderr.includes('Failed to connect to bus')) {
+              console.error('');
+              console.error('D-Bus session bus is not available. This is common in SSH sessions.');
+              console.error('Service file has been created at:', servicePath);
+              console.error('');
+              console.error('To fix this issue:');
+              console.error('1. Enable lingering: sudo loginctl enable-linger $USER');
+              console.error('2. Set environment: export XDG_RUNTIME_DIR=/run/user/$(id -u)');
+              console.error('3. Reload daemon: systemctl --user daemon-reload');
+              console.error('4. Enable service: systemctl --user enable ' + name);
+              if (autoStart) {
+                console.error('5. Start service: systemctl --user start ' + name);
+              }
+              console.error('');
+              console.error('Or use system-level service instead (requires sudo).');
+            } else if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
               if (system) {
                 console.error('This operation requires root privileges. Try running with sudo.');
               } else {
                 console.error('User-level service registration failed. Make sure systemd user services are enabled.');
-                console.error('You may need to run: systemctl --user daemon-reload');
               }
             }
             reject(err);
@@ -247,19 +321,28 @@ export const manageService = async (register, { name, description, command, env 
 
       // For user-level services, use --user flag
       const userFlag = !system ? ' --user' : '';
+      const prefix = needsSudo ? 'sudo ' : '';
 
-      const disableCmd = `${needsSudo ? 'sudo ' : ''}systemctl${userFlag} stop ${name} && ${needsSudo ? 'sudo ' : ''}systemctl${userFlag} disable ${name} && ${needsSudo ? 'sudo ' : ''}rm ${servicePath}`;
-
-      exec(disableCmd, (err, stdout, stderr) => {
+      // Stop service first (ignore errors if service is not running)
+      exec(`${prefix}systemctl${userFlag} stop ${name} 2>/dev/null; ${prefix}systemctl${userFlag} disable ${name}`, (err, stdout, stderr) => {
         if (err) {
-          console.error(`Linux service error: ${stderr}`);
-          if (stderr.includes('Permission denied')) {
-            console.error('This operation requires root privileges. Try running with sudo.');
+          console.error(`Linux service disable error: ${stderr}`);
+          if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
+            console.error(system
+              ? 'This operation requires root privileges. Try running with sudo.'
+              : 'User-level service unregister failed. Check D-Bus session.');
           }
           reject(err);
         } else {
-          console.log(`Service "${name}" unregistered successfully on Linux.`);
-          resolve(stdout);
+          // Remove the service file
+          try {
+            fs.unlinkSync(servicePath);
+            console.log(`Service "${name}" unregistered successfully on Linux.`);
+            resolve(stdout);
+          } catch (rmErr) {
+            console.error(`Error removing service file: ${rmErr.message}`);
+            reject(rmErr);
+          }
         }
       });
     }
@@ -286,8 +369,12 @@ export const startStopService = async (start, name, system = true) => {
     exec(cmd, (err, stdout, stderr) => {
       if (err) {
         console.error(`Linux ${start ? 'start' : 'stop'} error: ${stderr}`);
-        if (stderr.includes('Permission denied')) {
-          console.error('This operation requires root privileges. Try running with sudo.');
+        if (stderr.includes('DBUS_SESSION_BUS_ADDRESS') || stderr.includes('Failed to connect to bus')) {
+          console.error('D-Bus session bus is not available. See documentation for user-level service setup.');
+        } else if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
+          console.error(system
+            ? 'This operation requires root privileges. Try running with sudo.'
+            : 'User-level service operation failed. Check D-Bus session.');
         }
         reject(err);
       } else {
@@ -326,12 +413,12 @@ export const enableService = async (name, system = true) => {
     exec(cmd, (err, stdout, stderr) => {
       if (err) {
         console.error(`Linux service enable error: ${stderr}`);
-        if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
-          if (system) {
-            console.error('This operation requires root privileges. Try running with sudo.');
-          } else {
-            console.error('User-level service enable failed. Make sure systemd user services are enabled.');
-          }
+        if (stderr.includes('DBUS_SESSION_BUS_ADDRESS') || stderr.includes('Failed to connect to bus')) {
+          console.error('D-Bus session bus is not available. See documentation for user-level service setup.');
+        } else if (stderr.includes('Permission denied') || stderr.includes('Interactive authentication required')) {
+          console.error(system
+            ? 'This operation requires root privileges. Try running with sudo.'
+            : 'User-level service enable failed. Make sure systemd user services are enabled.');
         }
         reject(err);
       } else {
